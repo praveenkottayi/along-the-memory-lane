@@ -1,7 +1,6 @@
 # Along the Memory Lane — Project Vision
 
-> *"The life of a man is a journey; a journey that must be travelled however bad the roads and the accommodations."* — Oliver Goldsmith
-
+![alt text](image.png)
 ---
 
 ## What is this?
