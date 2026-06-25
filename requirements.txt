@@ -1,0 +1,26 @@
+# Core RAG
+llama-index-core
+llama-index-vector-stores-chroma
+llama-index-embeddings-ollama
+llama-index-llms-ollama
+
+# Vector store
+chromadb
+
+# Data parsing
+beautifulsoup4
+lxml
+python-dateutil
+
+# OCR (Apple Vision via pyobjc - macOS only)
+pyobjc-framework-Vision
+pyobjc-framework-Quartz
+Pillow
+
+# UI
+streamlit
+
+# Utilities
+python-dotenv
+tqdm
+rich

@@ -1,0 +1,24 @@
+# Environment
+.env
+venv/
+.venv/
+
+# Data - never commit personal content
+data/
+memory_store/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# Streamlit
+.streamlit/secrets.toml
