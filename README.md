@@ -21,7 +21,7 @@ flowchart TD
     subgraph INGEST["🔄 Ingestion Pipeline"]
         SCAN["📱 Scan with any phone\n→ sync to Mac"]
         OCR["🔤 OCR\n(Apple Vision on Mac — local)"]
-        WP["📄 WordPress XML\nParser"]
+        WP["📄 WordPress.com\nREST API"]
         CHUNK["✂️ Chunk into\npassages"]
         EMBED["🧠 Embed with\nnomic-embed-text\n(Ollama)"]
         STORE["🗄️ Store in\nChromaDB\n(local)"]
