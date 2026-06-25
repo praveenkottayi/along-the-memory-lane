@@ -102,8 +102,8 @@ Your memories (journals, blogs, notes)
 - [ ] Test with real blog data
 
 ### Phase 2 — Handwritten Journals
-- [ ] iPhone/Mac camera scanning workflow
-- [ ] Apple Vision OCR integration
+- [ ] Scan pages with any phone camera → sync to Mac (Google Photos / USB)
+- [ ] Apple Vision OCR on Mac (processes images locally via Python)
 - [ ] Date extraction from handwritten headers
 - [ ] Merge journal entries into the same index
 
@@ -136,7 +136,8 @@ Your memories (journals, blogs, notes)
 | AI brain | Llama 3.1 (via Ollama) |
 | Memory search | nomic-embed-text + ChromaDB |
 | RAG framework | LlamaIndex |
-| Handwriting OCR | Apple Vision (on-device) |
+| Scanning | Any phone camera → sync to Mac |
+| Handwriting OCR | Apple Vision (runs on Mac, via Python) |
 | UI | Streamlit |
 | Language | Python |
 

@@ -19,8 +19,8 @@ flowchart TD
     end
 
     subgraph INGEST["🔄 Ingestion Pipeline"]
-        SCAN["📱 Scan with iPhone\n(Continuity Camera)"]
-        OCR["🔤 OCR\n(Apple Vision — on device)"]
+        SCAN["📱 Scan with any phone\n→ sync to Mac"]
+        OCR["🔤 OCR\n(Apple Vision on Mac — local)"]
         WP["📄 WordPress XML\nParser"]
         CHUNK["✂️ Chunk into\npassages"]
         EMBED["🧠 Embed with\nnomic-embed-text\n(Ollama)"]
@@ -121,7 +121,7 @@ along-the-memory-lane/
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | WordPress blog ingestion + RAG query | 🟡 In Progress |
-| 2 | Handwritten journal OCR (Apple Vision) | ⬜ Planned |
+| 2 | Handwritten journal OCR (scan with phone → Apple Vision on Mac) | ⬜ Planned |
 | 3 | Image search with CLIP embeddings | ⬜ Planned |
 | 4 | Timeline view + "On This Day" feature | ⬜ Planned |
 
