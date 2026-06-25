@@ -3,7 +3,7 @@
 venv/
 .venv/
 
-# Data - never commit personal content
+# Data — never commit personal content
 data/
 memory_store/
 
@@ -21,4 +21,8 @@ build/
 .DS_Store
 
 # Streamlit
-.streamlit/secrets.toml
+.streamlit/
+
+# uv
+uv.lock
+.python-version

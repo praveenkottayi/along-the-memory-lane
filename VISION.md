@@ -60,8 +60,8 @@ Journals contain your rawest, most honest thoughts. They are not for the cloud. 
 
 | Source | Format | Status |
 |--------|--------|--------|
+| Blog posts | Fetched via WordPress.com REST API (posts + images) | ✅ Done |
 | Personal journals (13 years) | Handwritten → scan → OCR | Phase 2 |
-| Blog posts | WordPress XML export | Phase 1 ✅ |
 | Written notes | Handwritten → scan → OCR | Phase 2 |
 | Photos | JPEG/PNG with date metadata | Phase 3 |
 
@@ -93,29 +93,32 @@ Your memories (journals, blogs, notes)
 
 ## Roadmap
 
-### Phase 1 — Blogs (in progress)
-- [x] Project scaffolding
-- [x] WordPress XML parser
-- [x] Embedding + vector storage pipeline
-- [x] Basic query UI (Streamlit)
-- [ ] Date range filtering
-- [ ] Test with real blog data
+### Phase 1 — Blogs ✅ Complete
+- [x] Project scaffolding and configuration
+- [x] WordPress.com API fetcher (posts + images downloaded)
+- [x] Text cleaning, chunking, embedding pipeline
+- [x] ChromaDB vector store (local, persistent)
+- [x] Streamlit query UI
+- [x] Relevance score threshold filter (pre-LLM)
+- [x] Date range and source filters
+- [x] Code review, security audit, cleanup
 
-### Phase 2 — Handwritten Journals
+### Phase 2 — Handwritten Journals (next)
 - [ ] Scan pages with any phone camera → sync to Mac (Google Photos / USB)
 - [ ] Apple Vision OCR on Mac (processes images locally via Python)
 - [ ] Date extraction from handwritten headers
-- [ ] Merge journal entries into the same index
+- [ ] Merge journal entries into the same index as blogs
 
 ### Phase 3 — Photos
-- [ ] CLIP image embeddings
+- [ ] CLIP image embeddings for visual search
 - [ ] Link photos to journal entries by date
 - [ ] Search by visual content + date
 
 ### Phase 4 — Polish
-- [ ] Timeline view (browse by year/month)
 - [ ] "On this day" feature — what were you doing exactly N years ago?
+- [ ] Timeline browser by year and month
 - [ ] Export memory summaries as PDFs
+- [ ] Migrate to Qdrant for multimodal (text + image) named vectors
 
 ---
 

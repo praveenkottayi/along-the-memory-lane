@@ -11,16 +11,13 @@ chromadb
 beautifulsoup4
 lxml
 python-dateutil
+requests
 
-# OCR (Apple Vision via pyobjc - macOS only)
-pyobjc-framework-Vision
-pyobjc-framework-Quartz
+# OCR — macOS only (Apple Vision via pyobjc)
+# Install only on macOS: pip install pyobjc-framework-Vision pyobjc-framework-Quartz
+# pyobjc-framework-Vision; sys_platform == "darwin"
+# pyobjc-framework-Quartz; sys_platform == "darwin"
 Pillow
 
 # UI
 streamlit
-
-# Utilities
-python-dotenv
-tqdm
-rich

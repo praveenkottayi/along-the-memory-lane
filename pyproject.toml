@@ -1,0 +1,22 @@
+[project]
+name = "along-the-memory-lane"
+version = "0.1.0"
+description = "A local-first, AI-powered personal memory system"
+requires-python = ">=3.11"
+dependencies = [
+    "llama-index-core",
+    "llama-index-vector-stores-chroma",
+    "llama-index-embeddings-ollama",
+    "llama-index-llms-ollama",
+    "chromadb",
+    "beautifulsoup4",
+    "lxml",
+    "python-dateutil",
+    "pyobjc-framework-Vision",
+    "pyobjc-framework-Quartz",
+    "Pillow",
+    "streamlit",
+    "python-dotenv",
+    "tqdm",
+    "rich",
+]

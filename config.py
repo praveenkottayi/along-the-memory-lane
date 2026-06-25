@@ -1,6 +1,9 @@
 """
 Central config for Along the Memory Lane.
 All paths and model settings live here.
+
+Call ensure_dirs() once at the start of each script to create required directories.
+Do not rely on import-time side effects.
 """
 from pathlib import Path
 
@@ -17,15 +20,17 @@ RAW_NOTES_DIR = RAW_DIR / "notes"
 
 # Ollama models
 EMBED_MODEL = "nomic-embed-text"
-LLM_MODEL = "llama3.1"  # switch to llama3.1:70b if you want more power
+LLM_MODEL = "llama3.1:8b-instruct-q4_0"
 
 # ChromaDB
 CHROMA_COLLECTION = "memories"
 
 # Chunking
-CHUNK_SIZE = 512       # tokens
+CHUNK_SIZE = 512
 CHUNK_OVERLAP = 64
 
-# Ensure directories exist
-for d in [RAW_JOURNAL_DIR, RAW_BLOG_DIR, RAW_NOTES_DIR, PROCESSED_DIR, MEMORY_STORE_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
+
+def ensure_dirs():
+    """Create required data directories. Call once at script startup."""
+    for d in [RAW_JOURNAL_DIR, RAW_BLOG_DIR, RAW_NOTES_DIR, PROCESSED_DIR, MEMORY_STORE_DIR]:
+        d.mkdir(parents=True, exist_ok=True)

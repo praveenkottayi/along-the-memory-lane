@@ -74,10 +74,12 @@ pip install -r requirements.txt
 
 ### 3. Ingest blog data (Phase 1)
 ```bash
-# Export from: WordPress Admin → Tools → Export → All content
-# Save the .xml file to data/raw/blog/
+# Fetch all posts and images directly from your WordPress.com site
+python scripts/fetch_wordpress_api.py --site yoursite.com
 
-python scripts/parse_wordpress.py --input data/raw/blog/wordpress_export.xml
+# Alternatively, if you have a local WordPress XML export:
+# python scripts/parse_wordpress.py --input data/raw/blog/wordpress_export.xml
+
 python scripts/ingest.py
 ```
 
@@ -120,10 +122,10 @@ along-the-memory-lane/
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | WordPress blog ingestion + RAG query | 🟡 In Progress |
-| 2 | Handwritten journal OCR (scan with phone → Apple Vision on Mac) | ⬜ Planned |
+| 1 | WordPress blog ingestion + RAG query UI | ✅ Complete |
+| 2 | Handwritten journal OCR (scan with phone → Apple Vision on Mac) | 🔜 Next |
 | 3 | Image search with CLIP embeddings | ⬜ Planned |
-| 4 | Timeline view + "On This Day" feature | ⬜ Planned |
+| 4 | "On This Day" feature + timeline browser + Qdrant migration | ⬜ Planned |
 
 ---
 

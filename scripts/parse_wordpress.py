@@ -1,34 +1,43 @@
 """
-Parse WordPress XML export into structured text files.
+Parse a WordPress XML export file into structured text files.
 
 Usage:
     python scripts/parse_wordpress.py --input data/raw/blog/wordpress_export.xml
 
-Each post becomes a .txt file in data/processed/ with a metadata header.
+Each published post becomes a .txt file in data/processed/blog/ with a metadata header.
+Use this script if you have a local WordPress XML export instead of a live site.
 """
 import argparse
 import re
-from pathlib import Path
+import sys
 from datetime import datetime
+from html import unescape
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import PROCESSED_DIR
+from config import PROCESSED_DIR, ensure_dirs
 
 
 def clean_html(html: str) -> str:
-    """Strip HTML tags and clean whitespace."""
+    """Strip HTML tags and normalise whitespace."""
     soup = BeautifulSoup(html, "lxml")
     text = soup.get_text(separator="\n")
-    # Collapse multiple blank lines
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def make_slug(title: str) -> str:
+    """Convert a post title into a safe filename slug."""
+    slug = re.sub(r"[^\w\s-]", "", title.lower())
+    slug = re.sub(r"[\s_-]+", "-", slug).strip("-")
+    return slug[:60].strip("-")
 
 
 def parse_wordpress_export(xml_path: Path) -> list[dict]:
-    """Extract posts from WordPress WXR export file."""
+    """Extract published posts and pages from a WordPress WXR export file."""
     with open(xml_path, "r", encoding="utf-8") as f:
         soup = BeautifulSoup(f, "lxml-xml")
 
@@ -37,7 +46,6 @@ def parse_wordpress_export(xml_path: Path) -> list[dict]:
         post_type = item.find("post_type")
         status = item.find("status")
 
-        # Only published posts/pages
         if not post_type or post_type.text not in ("post", "page"):
             continue
         if not status or status.text != "publish":
@@ -45,21 +53,19 @@ def parse_wordpress_export(xml_path: Path) -> list[dict]:
 
         title = item.find("title")
         pub_date = item.find("pubDate")
-        content = item.find("encoded")  # wp:content or content:encoded
-        if not content:
-            content = item.find("content:encoded")
+        content = item.find("encoded")
 
         if not title or not content:
             continue
 
-        # Parse date
         try:
             dt = date_parser.parse(pub_date.text) if pub_date else datetime(1970, 1, 1)
         except Exception:
+            print(f"  Warning: could not parse date for '{title.text.strip()}', using epoch.")
             dt = datetime(1970, 1, 1)
 
         posts.append({
-            "title": title.text.strip(),
+            "title": unescape(title.text.strip()),
             "date": dt.strftime("%Y-%m-%d"),
             "datetime": dt.isoformat(),
             "content": clean_html(content.text),
@@ -70,16 +76,12 @@ def parse_wordpress_export(xml_path: Path) -> list[dict]:
 
 
 def save_posts(posts: list[dict], output_dir: Path):
-    """Save each post as a .txt file with metadata header."""
+    """Save each post as a .txt file with a metadata header."""
     output_dir = output_dir / "blog"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for post in posts:
-        # Filename: date + slugified title
-        slug = re.sub(r"[^\w\s-]", "", post["title"].lower())
-        slug = re.sub(r"[\s_-]+", "-", slug)[:60]
-        filename = f"{post['date']}_{slug}.txt"
-
+        filename = f"{post['date']}_{make_slug(post['title'])}.txt"
         content = f"""---
 date: {post['date']}
 datetime: {post['datetime']}
@@ -95,8 +97,8 @@ title: {post['title']}
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True, help="Path to WordPress XML export")
+    ap = argparse.ArgumentParser(description="Parse a WordPress XML export into text files.")
+    ap.add_argument("--input", required=True, help="Path to WordPress XML export file")
     args = ap.parse_args()
 
     xml_path = Path(args.input)
@@ -104,6 +106,7 @@ def main():
         print(f"File not found: {xml_path}")
         sys.exit(1)
 
+    ensure_dirs()
     print(f"Parsing {xml_path}...")
     posts = parse_wordpress_export(xml_path)
     print(f"Found {len(posts)} published posts")
