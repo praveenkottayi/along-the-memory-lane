@@ -26,8 +26,14 @@ PAGE_PATTERN = re.compile(
     r"^===== PAGE (\d+) \| DATE: (.+?) \| DATE_HEADER: (.+?)(?:\s*\| TOPIC: .+?)? =====$"
 )
 
+# Values that indicate the DATE field carries no real date (cover pages, etc.)
 DATE_INVALID = {"(cover)", "(none)", "(blank)", "(unknown)", ""}
-# These DATE_HEADER values mean "continuation of previous entry, not a new one"
+
+# Values in the DATE_HEADER field that mean "this page continues the previous entry".
+# Overlaps with DATE_INVALID intentionally: both sets check different fields
+# (DATE vs DATE_HEADER), and markers like "(none)" are valid in both contexts.
+# "(continues)" is only here, not in DATE_INVALID, because the DATE field on
+# continuation pages still carries a real inherited date.
 CONTINUATION_MARKERS = {"(continues)", "(none)", "(cover)", "(blank)", "(unknown)", ""}
 
 
@@ -61,6 +67,7 @@ def format_entry(date: str, journal: str, pages: list[dict]) -> str:
     return front_matter(
         {
             "date": date,
+            "title": f"Journal — {date}",
             "source": "journal",
             "journal": journal,
             "time": extra.get("time"),

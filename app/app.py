@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import chromadb
 import streamlit as st
 from llama_index.core import Settings, VectorStoreIndex
-from llama_index.core.vector_stores import FilterOperator, MetadataFilter, MetadataFilters
+from llama_index.core.vector_stores import FilterCondition, FilterOperator, MetadataFilter, MetadataFilters
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
 from llama_index.vector_stores.chroma import ChromaVectorStore
@@ -98,17 +98,26 @@ if query:
             if date_to:
                 filter_list.append(MetadataFilter(key="date", value=str(date_to), operator=FilterOperator.LTE))
             if source_filter and len(source_filter) < 3:
-                for src in source_filter:
-                    filter_list.append(MetadataFilter(key="source", value=src, operator=FilterOperator.EQ))
+                # Use OR so selecting "blog + journal" returns chunks from either source,
+                # not chunks that are simultaneously both (which would always be empty).
+                source_filters = [
+                    MetadataFilter(key="source", value=src, operator=FilterOperator.EQ)
+                    for src in source_filter
+                ]
+                filter_list.append(
+                    MetadataFilters(filters=source_filters, condition=FilterCondition.OR)
+                )
 
             # Retrieve more than top_k so we can apply score threshold and still have enough
             fetch_k = min(top_k * 2, 20)
 
-            retriever = index.as_retriever(similarity_top_k=fetch_k)
+            chroma_filters = MetadataFilters(filters=filter_list) if filter_list else None
+            retriever = index.as_retriever(similarity_top_k=fetch_k, filters=chroma_filters)
             nodes = retriever.retrieve(expand_query(query))
 
-            # Apply score threshold BEFORE sending to LLM
-            filtered_nodes = [n for n in nodes if n.score is None or n.score >= score_threshold]
+            # Apply score threshold BEFORE sending to LLM.
+            # Exclude None-scored chunks — they have no relevance signal.
+            filtered_nodes = [n for n in nodes if n.score is not None and n.score >= score_threshold]
             filtered_nodes = filtered_nodes[:top_k]
 
             if not filtered_nodes:

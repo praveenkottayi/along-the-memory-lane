@@ -68,7 +68,7 @@ touch the cloud.
 | Source | Format | Status |
 |--------|--------|--------|
 | Blog posts | Fetched via WordPress.com REST API (posts + images) | ✅ Done |
-| Personal journals (13 years) | Handwritten → scan → Claude-vision OCR | 🚧 Phase 2 |
+| Personal journals (13 years) | Handwritten → scan → Claude-vision OCR | ✅ Done (journal #16 ingested; local OCR deferred) |
 | Written notes | Handwritten → scan → Claude-vision OCR | 🚧 Phase 2 |
 | Photos | JPEG/PNG with date metadata | Phase 3 |
 
@@ -110,13 +110,16 @@ Your memories (journals, blogs, notes)
 - [x] Date range and source filters
 - [x] Code review, security audit, cleanup
 
-### Phase 2 — Handwritten Journals (in progress)
+### Phase 2 — Handwritten Journals ✅ Complete (local OCR deferred)
 - [x] Scan pages (phone / scanner) → PDF, split into page images (`pdf_to_images.py`)
-- [x] Handwriting OCR via Claude vision (`ocr_journals.py`) — local models couldn't read cursive
+- [x] Handwriting OCR via Claude vision (`ocr_journals.py`) — page-level sidecar caching, resumable, `--all` batch mode
+- [x] Alternative: Claude-chat transcript parser (`parse_claude_transcript.py`) for higher-quality transcriptions
 - [x] Date / time / day / location extraction from handwritten headers
+- [x] `--inspect` mode for tuning header detection without API calls
+- [x] Front-matter metadata (date, title, source) propagated through to ChromaDB so UI filters work
 - [x] Merge journal entries into the same ChromaDB index as blogs (`ingest.py --incremental`)
-- [ ] Tune header detection across all 16 journals
-- [ ] **Move OCR onto local llama3.2-vision** — replace the Claude-API trial so the system is fully offline again
+- [x] Consistent metadata schema across all sources (date, title, source, journal)
+- [ ] **Move OCR onto local llama3.2-vision** — deferred until local vision models can read cursive reliably; Claude API remains the stopgap
 
 ### Phase 3 — Photos
 - [ ] Migrate from ChromaDB to Qdrant (named vectors — text + image per record)

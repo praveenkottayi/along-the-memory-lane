@@ -5,8 +5,13 @@ Usage:
     python scripts/ingest.py                  # full ingest (warns if data exists)
     python scripts/ingest.py --incremental    # only ingest new files
 
-Reads all .txt files from data/processed/, chunks them,
-embeds with nomic-embed-text (via Ollama), stores in ChromaDB.
+Reads all .txt files from data/processed/, parses their front-matter header
+into document metadata (date, source, title, etc.), chunks the body, embeds
+with nomic-embed-text (via Ollama), and stores in ChromaDB.
+
+Metadata is propagated to every chunk so the UI filters (date range, source)
+work correctly. This relies on parse_front_matter() in common.py — the same
+format used by all ingestion scripts (fetch_wordpress_api, ocr_journals, etc.).
 
 Incremental mode tracks ingested files in memory_store/ingested.json
 so re-running only adds new content — safe to run after adding journals.
@@ -18,11 +23,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import chromadb
-from llama_index.core import Settings, SimpleDirectoryReader, StorageContext, VectorStoreIndex
+from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
+from common import parse_front_matter
 from config import (
     CHROMA_COLLECTION,
     CHUNK_OVERLAP,
@@ -67,6 +73,35 @@ def save_ingested_files(ingested: set[str]):
 def get_all_processed_files() -> list[Path]:
     """Return all .txt files in the processed directory."""
     return sorted(PROCESSED_DIR.rglob("*.txt"))
+
+
+def load_documents(files: list[Path]) -> list[Document]:
+    """Read processed .txt files and return LlamaIndex Documents with metadata.
+
+    Each file uses the front-matter format written by front_matter() in common.py:
+        ---
+        date: 2015-06-12
+        source: journal
+        title: Journal — 2015-06-12
+        ---
+        Body text...
+
+    The metadata dict is attached to the Document so LlamaIndex propagates it
+    to every chunk stored in ChromaDB — enabling date and source filtering in
+    the UI.  Files with no front-matter are ingested as plain text with an
+    empty metadata dict (graceful fallback).
+    """
+    docs = []
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        metadata, body = parse_front_matter(text)
+        # Always record the source file path for debugging
+        metadata["file_path"] = str(f)
+        if body.strip():
+            docs.append(Document(text=body, metadata=metadata))
+        else:
+            print(f"  Warning: empty body in {f.name}, skipping.")
+    return docs
 
 
 def ingest(incremental: bool = False):
@@ -121,12 +156,9 @@ def ingest(incremental: bool = False):
         files_to_ingest = all_files
         print(f"Ingesting {len(files_to_ingest)} files...")
 
-    # Load only the files we need to ingest
-    reader = SimpleDirectoryReader(
-        input_files=[str(f) for f in files_to_ingest],
-    )
-    documents = reader.load_data()
-    print(f"Loaded {len(documents)} document chunks")
+    # Load files with front-matter parsed into document metadata
+    documents = load_documents(files_to_ingest)
+    print(f"Loaded {len(documents)} documents")
 
     vector_store = ChromaVectorStore(chroma_collection=collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)

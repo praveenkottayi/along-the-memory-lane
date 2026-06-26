@@ -2,11 +2,20 @@
 OCR pipeline for handwritten journal images.
 
 Usage:
+    # OCR a single journal
     python scripts/ocr_journals.py --journal data/raw/journal/16_2025-08_2026-01
+
+    # OCR all journals under data/raw/journal/ (skips fully-cached ones)
+    python scripts/ocr_journals.py --all
+
+    # Inspect entry grouping on cached sidecar files (no API calls)
+    python scripts/ocr_journals.py --journal data/raw/journal/16_2025-08_2026-01 --inspect
+    python scripts/ocr_journals.py --all --inspect
 
 For each journal folder:
   - Reads images in order (page_001.jpg, page_002.jpg, ...)
-  - Uses Claude vision (Anthropic API) to transcribe the handwriting
+  - Uses Claude vision (Anthropic API) to transcribe the handwriting, caching
+    the result as a sidecar <image>.ocr.txt so reruns skip already-done pages
   - Detects entry headers (date, time, day, location, WFH)
   - Groups consecutive pages into a single entry
   - Saves one .txt file per entry to data/processed/journal/
@@ -17,7 +26,6 @@ through the Anthropic API. Requires ANTHROPIC_API_KEY in the environment.
 """
 import argparse
 import base64
-import re
 import sys
 from pathlib import Path
 
@@ -25,8 +33,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import anthropic
 
-from common import front_matter
-from config import OCR_VISION_MODEL, PROCESSED_DIR, ensure_dirs
+from common import (
+    front_matter,
+    parse_date,
+    parse_day,
+    parse_location,
+    parse_time,
+    parse_work_mode,
+)
+from config import OCR_VISION_MODEL, PROCESSED_DIR, RAW_JOURNAL_DIR, ensure_dirs
 
 # ---------------------------------------------------------------------------
 # Handwriting OCR via Claude vision
@@ -53,7 +68,18 @@ def get_client() -> anthropic.Anthropic:
 
 
 def ocr_image(image_path: Path) -> str:
-    """Use Claude vision to transcribe a handwritten journal page."""
+    """Use Claude vision to transcribe a handwritten journal page.
+
+    Results are cached as a sidecar <image>.ocr.txt next to the image file.
+    Re-running the script loads the cache instead of calling the API, so:
+      - Interrupted runs can resume from where they left off.
+      - You can manually correct bad transcriptions by editing the .ocr.txt.
+      - The API is never called twice for the same page.
+    """
+    sidecar = image_path.with_suffix(".ocr.txt")
+    if sidecar.exists():
+        return sidecar.read_text(encoding="utf-8")
+
     media_type = MEDIA_TYPES.get(image_path.suffix.lower(), "image/jpeg")
     image_data = base64.standard_b64encode(image_path.read_bytes()).decode("utf-8")
 
@@ -80,96 +106,16 @@ def ocr_image(image_path: Path) -> str:
         print(f"  Warning: Claude OCR error for {image_path.name}: {e}")
         return ""
 
-    return "".join(b.text for b in response.content if b.type == "text").strip()
+    result = "".join(b.text for b in response.content if b.type == "text").strip()
+    sidecar.write_text(result, encoding="utf-8")
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Entry header detection
 # ---------------------------------------------------------------------------
-
-# Date patterns — handles various formats commonly used in handwriting
-DATE_PATTERNS = [
-    r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|"
-    r"July|August|September|October|November|December)\s+(\d{4})\b",
-    r"\b(January|February|March|April|May|June|July|August|September|October|"
-    r"November|December)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b",
-    r"\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})\b",
-]
-
-TIME_PATTERN = r"\b(\d{1,2})[:\.](\d{2})\s*(AM|PM|am|pm)?\b"
-
-DAY_PATTERN = r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b"
-
-LOCATION_KEYWORDS = [
-    "Mumbai", "Bangalore", "Delhi", "Chennai", "Goa", "Hyderabad", "Pune",
-    "Kochi", "Kerala", "office", "home", "cafe", "hotel", "airport",
-]
-
-WFH_PATTERN = r"\bWFH\b|\bWork\s+from\s+Home\b|\bwork\s+from\s+home\b"
-
-MONTH_MAP = {
-    "january": 1, "february": 2, "march": 3, "april": 4,
-    "may": 5, "june": 6, "july": 7, "august": 8,
-    "september": 9, "october": 10, "november": 11, "december": 12,
-}
-
-
-def parse_date(text: str) -> str | None:
-    """Try to extract a YYYY-MM-DD date from OCR text."""
-    # Format: "15th April 2013" or "April 15, 2013"
-    m = re.search(DATE_PATTERNS[0], text, re.IGNORECASE)
-    if m:
-        day, month_name, year = m.group(1), m.group(2), m.group(3)
-        month = MONTH_MAP.get(month_name.lower())
-        if month:
-            return f"{year}-{month:02d}-{int(day):02d}"
-
-    m = re.search(DATE_PATTERNS[1], text, re.IGNORECASE)
-    if m:
-        month_name, day, year = m.group(1), m.group(2), m.group(3)
-        month = MONTH_MAP.get(month_name.lower())
-        if month:
-            return f"{year}-{month:02d}-{int(day):02d}"
-
-    # Format: "15/04/2013" or "15-04-2013"
-    m = re.search(DATE_PATTERNS[2], text)
-    if m:
-        d, mo, y = m.group(1), m.group(2), m.group(3)
-        if len(y) == 2:
-            y = "20" + y
-        return f"{y}-{int(mo):02d}-{int(d):02d}"
-
-    return None
-
-
-def parse_time(text: str) -> str | None:
-    """Extract time string from OCR text."""
-    m = re.search(TIME_PATTERN, text, re.IGNORECASE)
-    if m:
-        h, mi, meridiem = m.group(1), m.group(2), m.group(3) or ""
-        return f"{h}:{mi} {meridiem}".strip()
-    return None
-
-
-def parse_day(text: str) -> str | None:
-    """Extract day of week from OCR text."""
-    m = re.search(DAY_PATTERN, text, re.IGNORECASE)
-    return m.group(1).capitalize() if m else None
-
-
-def parse_location(text: str) -> str | None:
-    """Extract location hint from OCR text."""
-    for loc in LOCATION_KEYWORDS:
-        if re.search(rf"\b{loc}\b", text, re.IGNORECASE):
-            return loc
-    return None
-
-
-def parse_work_mode(text: str) -> str | None:
-    """Detect WFH or similar work mode markers."""
-    if re.search(WFH_PATTERN, text, re.IGNORECASE):
-        return "WFH"
-    return None
+# parse_date / parse_time / parse_day / parse_location / parse_work_mode
+# are imported from common.py — edit them there, not here.
 
 
 def is_entry_header(text: str) -> bool:
@@ -199,11 +145,18 @@ def extract_metadata(header_text: str, journal_folder: str) -> dict:
 
 
 def format_entry(metadata: dict, pages_text: list[str]) -> str:
-    """Format a journal entry as a structured .txt file (front-matter + pages)."""
+    """Format a journal entry as a structured .txt file (front-matter + pages).
+
+    Title is synthesized from the date so every source has a consistent
+    metadata schema (blog posts have titles; journals get one generated here).
+    """
+    date = metadata["date"]
+    title = f"Journal — {date}"
     content = "\n\n--- page break ---\n\n".join(pages_text)
     return front_matter(
         {
-            "date": metadata["date"],
+            "date": date,
+            "title": title,
             "source": metadata["source"],
             "journal": metadata["journal"],
             "time": metadata.get("time"),
@@ -215,53 +168,52 @@ def format_entry(metadata: dict, pages_text: list[str]) -> str:
     )
 
 
-def process_journal(journal_dir: Path, output_dir: Path):
-    """OCR all pages in a journal folder and save one .txt per entry."""
-    journal_name = journal_dir.name
-    out_dir = output_dir / "journal" / journal_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Collect images in sorted order, skip cover
-    images = sorted([
+def get_journal_images(journal_dir: Path) -> list[Path]:
+    """Return sorted page images from a journal folder, skipping the cover."""
+    return sorted([
         f for f in journal_dir.iterdir()
         if f.suffix.lower() in (".jpg", ".jpeg", ".png")
         and f.stem.lower() != "cover"
     ])
 
-    if not images:
-        print(f"No images found in {journal_dir}")
-        return
 
-    print(f"\nProcessing journal: {journal_name} ({len(images)} pages)")
+def group_pages_into_entries(
+    images: list[Path],
+    journal_name: str,
+    ocr_fn,
+) -> list[tuple[dict, list[str]]]:
+    """OCR pages and group them into (metadata, pages_text) entries.
 
-    entries = []           # list of (metadata, [page_texts])
-    current_pages = []     # page texts for current entry
-    current_meta = None
+    Pages before the first detected header are saved as a preamble entry
+    with date "unknown" rather than being silently dropped.
+    """
+    entries: list[tuple[dict, list[str]]] = []
+    current_pages: list[str] = []
+    current_meta: dict | None = None
 
     for i, img_path in enumerate(images):
-        print(f"  OCR: {img_path.name} ({i+1}/{len(images)})")
-        text = ocr_image(img_path)
+        text = ocr_fn(img_path, i, len(images))
 
         if not text.strip():
             print(f"    Warning: no text extracted from {img_path.name}")
-            if current_pages:
+            if current_meta is not None:
                 current_pages.append("[unreadable page]")
             continue
 
         if is_entry_header(text):
-            # Save previous entry before starting new one
-            if current_pages and current_meta:
+            # Save the previous entry before starting a new one
+            if current_meta is not None and current_pages:
                 entries.append((current_meta, current_pages))
 
             current_meta = extract_metadata(text, journal_name)
             current_pages = [text]
-            print(f"    New entry detected: {current_meta['date']} "
+            print(f"    New entry: {current_meta['date']} "
                   f"{current_meta.get('time', '')} "
                   f"{current_meta.get('location', '')}")
         else:
-            # Continuation of current entry
-            if current_pages is None:
-                # Pages before first detected header — label as preamble
+            # Continuation page — or preamble before the first header
+            if current_meta is None:
+                # Pages before the first dated entry: save as preamble, don't drop
                 current_meta = {
                     "date": "unknown",
                     "source": "journal",
@@ -270,13 +222,19 @@ def process_journal(journal_dir: Path, output_dir: Path):
                 current_pages = []
             current_pages.append(text)
 
-    # Save last entry
-    if current_pages and current_meta:
+    # Flush the last entry
+    if current_meta is not None and current_pages:
         entries.append((current_meta, current_pages))
 
-    # Write entries to disk
+    return entries
+
+
+def save_entries(entries: list[tuple[dict, list[str]]], out_dir: Path) -> tuple[int, int]:
+    """Write entries to disk, returning (saved, unknown_count)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
     unknown_count = 0
+
     for meta, pages in entries:
         date = meta["date"]
         if date == "unknown":
@@ -284,19 +242,88 @@ def process_journal(journal_dir: Path, output_dir: Path):
             filename = f"unknown_{unknown_count:03d}.txt"
         else:
             filename = f"{date}.txt"
-            # Handle multiple entries on same date
             dest = out_dir / filename
             if dest.exists():
-                filename = f"{date}_{saved+1:02d}.txt"
+                # Multiple entries on the same date: append a counter
+                suffix = 2
+                while (out_dir / f"{date}_{suffix:02d}.txt").exists():
+                    suffix += 1
+                filename = f"{date}_{suffix:02d}.txt"
 
-        (out_dir / filename).write_text(
-            format_entry(meta, pages), encoding="utf-8"
-        )
+        (out_dir / filename).write_text(format_entry(meta, pages), encoding="utf-8")
         saved += 1
+
+    return saved, unknown_count
+
+
+# ---------------------------------------------------------------------------
+# Process modes
+# ---------------------------------------------------------------------------
+
+def process_journal(journal_dir: Path, output_dir: Path):
+    """OCR all pages in a journal folder and save one .txt per entry."""
+    journal_name = journal_dir.name
+    out_dir = output_dir / "journal" / journal_name
+
+    images = get_journal_images(journal_dir)
+    if not images:
+        print(f"No images found in {journal_dir}")
+        return
+
+    print(f"\nProcessing journal: {journal_name} ({len(images)} pages)")
+
+    def ocr_fn(img_path, i, total):
+        print(f"  OCR: {img_path.name} ({i+1}/{total})")
+        return ocr_image(img_path)
+
+    entries = group_pages_into_entries(images, journal_name, ocr_fn)
+    saved, unknown_count = save_entries(entries, out_dir)
 
     print(f"  Saved {saved} entries to {out_dir}")
     if unknown_count:
-        print(f"  Warning: {unknown_count} pages had no detectable date header")
+        print(f"  Warning: {unknown_count} page(s) had no detectable date header")
+
+
+def inspect_journal(journal_dir: Path):
+    """Show entry grouping from cached OCR sidecars — no API calls.
+
+    Prints per-page classification (HEADER/continuation) and the date detected,
+    so you can tune header detection patterns without spending API tokens.
+    Pages with no sidecar cache are flagged so you know to run OCR first.
+    """
+    journal_name = journal_dir.name
+    images = get_journal_images(journal_dir)
+
+    if not images:
+        print(f"No images found in {journal_dir}")
+        return
+
+    print(f"\nInspecting: {journal_name} ({len(images)} pages)")
+    uncached = 0
+
+    for img_path in images:
+        sidecar = img_path.with_suffix(".ocr.txt")
+        if not sidecar.exists():
+            print(f"  {img_path.name}: [no OCR cache — run without --inspect first]")
+            uncached += 1
+            continue
+
+        text = sidecar.read_text(encoding="utf-8")
+        first_lines = "\n".join(text.strip().splitlines()[:5])
+        date = parse_date(first_lines)
+
+        if date:
+            loc = parse_location(first_lines)
+            time_ = parse_time(first_lines)
+            extras = " ".join(filter(None, [time_, loc]))
+            print(f"  {img_path.name}: HEADER  → {date} {extras}".rstrip())
+        else:
+            # Show first non-empty line as a hint for manual inspection
+            preview = next((l.strip() for l in text.splitlines() if l.strip()), "")
+            print(f"  {img_path.name}: continuation  ({preview[:60]})")
+
+    if uncached:
+        print(f"\n  {uncached} page(s) not yet OCR'd. Run without --inspect to process them.")
 
 
 # ---------------------------------------------------------------------------
@@ -307,21 +334,57 @@ def main():
     ap = argparse.ArgumentParser(
         description="OCR journal images and extract entries."
     )
-    ap.add_argument(
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument(
         "--journal",
-        required=True,
-        help="Path to a journal folder (e.g. data/raw/journal/01_2013-01_2013-08)"
+        help="Path to a single journal folder (e.g. data/raw/journal/01_2013-01_2013-08)"
+    )
+    source.add_argument(
+        "--all",
+        action="store_true",
+        help="Process all journal folders under data/raw/journal/",
+    )
+    ap.add_argument(
+        "--inspect",
+        action="store_true",
+        help=(
+            "Show per-page header detection results from cached .ocr.txt sidecars "
+            "without calling the API. Run OCR first if sidecars are missing."
+        ),
     )
     args = ap.parse_args()
 
-    journal_dir = Path(args.journal)
-    if not journal_dir.exists():
-        print(f"Journal folder not found: {journal_dir}")
-        sys.exit(1)
-
     ensure_dirs()
-    process_journal(journal_dir, PROCESSED_DIR)
-    print("\nDone. Now run: python scripts/ingest.py --incremental")
+
+    if args.all:
+        journal_dirs = sorted([
+            d for d in RAW_JOURNAL_DIR.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        ])
+        if not journal_dirs:
+            print(f"No journal folders found under {RAW_JOURNAL_DIR}")
+            sys.exit(1)
+        print(f"Found {len(journal_dirs)} journal folder(s)")
+
+        for journal_dir in journal_dirs:
+            if args.inspect:
+                inspect_journal(journal_dir)
+            else:
+                # process_journal always runs — it skips OCR API calls for pages
+                # that already have a .ocr.txt sidecar, but re-runs entry grouping
+                # and saves .txt files. Safe to call repeatedly.
+                process_journal(journal_dir, PROCESSED_DIR)
+    else:
+        journal_dir = Path(args.journal)
+        if not journal_dir.exists():
+            print(f"Journal folder not found: {journal_dir}")
+            sys.exit(1)
+
+        if args.inspect:
+            inspect_journal(journal_dir)
+        else:
+            process_journal(journal_dir, PROCESSED_DIR)
+            print("\nDone. Now run: python scripts/ingest.py --incremental")
 
 
 if __name__ == "__main__":
