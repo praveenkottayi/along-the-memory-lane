@@ -8,7 +8,6 @@ Each published post becomes a .txt file in data/processed/blog/ with a metadata 
 Use this script if you have a local WordPress XML export instead of a live site.
 """
 import argparse
-import re
 import sys
 from datetime import datetime
 from html import unescape
@@ -19,21 +18,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
+from common import front_matter, html_to_text, make_slug
 from config import PROCESSED_DIR, ensure_dirs
-
-
-def clean_html(html: str) -> str:
-    """Strip HTML tags and normalise whitespace."""
-    soup = BeautifulSoup(html, "lxml")
-    text = soup.get_text(separator="\n")
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
-
-
-def make_slug(title: str) -> str:
-    """Convert a post title into a safe filename slug."""
-    slug = re.sub(r"[^\w\s-]", "", title.lower())
-    slug = re.sub(r"[\s_-]+", "-", slug).strip("-")
-    return slug[:60].strip("-")
 
 
 def parse_wordpress_export(xml_path: Path) -> list[dict]:
@@ -68,7 +54,7 @@ def parse_wordpress_export(xml_path: Path) -> list[dict]:
             "title": unescape(title.text.strip()),
             "date": dt.strftime("%Y-%m-%d"),
             "datetime": dt.isoformat(),
-            "content": clean_html(content.text),
+            "content": html_to_text(content.text),
             "source": "blog",
         })
 
@@ -82,15 +68,15 @@ def save_posts(posts: list[dict], output_dir: Path):
 
     for post in posts:
         filename = f"{post['date']}_{make_slug(post['title'])}.txt"
-        content = f"""---
-date: {post['date']}
-datetime: {post['datetime']}
-source: blog
-title: {post['title']}
----
-
-{post['content']}
-"""
+        content = front_matter(
+            {
+                "date": post["date"],
+                "datetime": post["datetime"],
+                "source": "blog",
+                "title": post["title"],
+            },
+            post["content"],
+        )
         (output_dir / filename).write_text(content, encoding="utf-8")
 
     print(f"Saved {len(posts)} posts to {output_dir}")

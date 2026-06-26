@@ -1,0 +1,23 @@
+# Personal glossary — single source of truth for names & abbreviations.
+#
+# Copy this file to glossary.txt and fill in your real entries.
+# glossary.txt is gitignored (personal data) — never commit it.
+#
+# Format, one entry per line:   shorthand = Expanded form (note)
+#   - The left side (lowercased) is what gets matched in your query.
+#   - The right side is injected both into the LLM system prompt AND
+#     substituted into the query before vector retrieval, so RAG hits.
+#   - Lines starting with # and blank lines are ignored.
+
+# People
+anu = Anu (wife)
+achan = Achan (father)
+amma = Amma (mother)
+ammama = Ammama (grandmother)
+preetha = Preetha (sister)
+
+# Work
+michelin = Michelin (employer)
+
+# Places
+pkd = Palakkad

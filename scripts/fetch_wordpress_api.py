@@ -10,7 +10,6 @@ For each post, saves:
   data/raw/blog/images/<date>_<slug>/     ← all images from that post
 """
 import argparse
-import re
 import sys
 import time
 from html import unescape
@@ -23,6 +22,7 @@ import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
+from common import front_matter, html_to_text, make_slug
 from config import PROCESSED_DIR, RAW_BLOG_DIR, ensure_dirs
 
 
@@ -36,19 +36,6 @@ def extract_images(html: str) -> list[str]:
             src = src.split("?")[0]  # strip WordPress CDN resize params
             urls.append(src)
     return list(dict.fromkeys(urls))  # deduplicate, preserve order
-
-
-def clean_html(html: str, image_paths: list[str]) -> str:
-    """Strip HTML tags, normalise whitespace, append local image references."""
-    soup = BeautifulSoup(html or "", "lxml")
-    text = soup.get_text(separator="\n")
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-
-    if image_paths:
-        refs = "\n".join(f"  - {p}" for p in image_paths)
-        text += f"\n\n[images]\n{refs}"
-
-    return text
 
 
 def download_images(image_urls: list[str], folder: Path) -> list[str]:
@@ -76,13 +63,6 @@ def download_images(image_urls: list[str], folder: Path) -> list[str]:
             print(f"    Warning: could not download {url}: {e}")
 
     return saved
-
-
-def make_slug(title: str) -> str:
-    """Convert a post title into a safe filename slug."""
-    slug = re.sub(r"[^\w\s-]", "", title.lower())
-    slug = re.sub(r"[\s_-]+", "-", slug).strip("-")
-    return slug[:60].strip("-")
 
 
 def fetch_all_posts(site: str) -> list[dict]:
@@ -157,17 +137,21 @@ def save_posts(posts: list[dict], processed_dir: Path, images_dir: Path):
             print(f"  Downloading {len(image_urls)} image(s) for: {title[:50]}")
             local_image_paths = download_images(image_urls, post_image_dir)
 
-        content = clean_html(raw_content, local_image_paths)
-        text = f"""---
-date: {date_str}
-datetime: {datetime_str}
-source: blog
-title: {title}
-images: {len(local_image_paths)}
----
+        content = html_to_text(raw_content)
+        if local_image_paths:
+            refs = "\n".join(f"  - {p}" for p in local_image_paths)
+            content += f"\n\n[images]\n{refs}"
 
-{content}
-"""
+        text = front_matter(
+            {
+                "date": date_str,
+                "datetime": datetime_str,
+                "source": "blog",
+                "title": title,
+                "images": len(local_image_paths),
+            },
+            content,
+        )
         (text_dir / f"{post_id}.txt").write_text(text, encoding="utf-8")
 
     print(f"\nSaved {len(posts)} posts to {text_dir}")

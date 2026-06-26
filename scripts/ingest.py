@@ -2,14 +2,16 @@
 Ingest processed text files into ChromaDB via LlamaIndex.
 
 Usage:
-    python scripts/ingest.py
+    python scripts/ingest.py                  # full ingest (warns if data exists)
+    python scripts/ingest.py --incremental    # only ingest new files
 
 Reads all .txt files from data/processed/, chunks them,
 embeds with nomic-embed-text (via Ollama), stores in ChromaDB.
 
-Re-running this script will warn if data already exists and ask
-before proceeding to avoid duplicate entries.
+Incremental mode tracks ingested files in memory_store/ingested.json
+so re-running only adds new content — safe to run after adding journals.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -32,6 +34,8 @@ from config import (
     ensure_dirs,
 )
 
+TRACKING_FILE = MEMORY_STORE_DIR / "ingested.json"
+
 
 def setup_llama_index():
     """Configure LlamaIndex to use local Ollama models."""
@@ -42,13 +46,30 @@ def setup_llama_index():
 
 
 def get_chroma_collection():
-    """Initialize ChromaDB persistent client and return collection."""
+    """Initialize ChromaDB persistent client and return client + collection."""
     client = chromadb.PersistentClient(path=str(MEMORY_STORE_DIR))
     collection = client.get_or_create_collection(CHROMA_COLLECTION)
     return client, collection
 
 
-def ingest():
+def load_ingested_files() -> set[str]:
+    """Load the set of already-ingested file paths from tracking file."""
+    if TRACKING_FILE.exists():
+        return set(json.loads(TRACKING_FILE.read_text()))
+    return set()
+
+
+def save_ingested_files(ingested: set[str]):
+    """Persist the set of ingested file paths to tracking file."""
+    TRACKING_FILE.write_text(json.dumps(sorted(ingested), indent=2))
+
+
+def get_all_processed_files() -> list[Path]:
+    """Return all .txt files in the processed directory."""
+    return sorted(PROCESSED_DIR.rglob("*.txt"))
+
+
+def ingest(incremental: bool = False):
     ensure_dirs()
 
     print("Setting up models...")
@@ -57,34 +78,55 @@ def ingest():
     print("Connecting to ChromaDB...")
     client, collection = get_chroma_collection()
 
-    # Warn if collection already has data to prevent duplicates
-    existing_count = collection.count()
-    if existing_count > 0:
-        print(f"\nWarning: collection already has {existing_count} entries.")
-        print("Re-ingesting will create duplicate chunks and corrupt search results.")
-        response = input("Clear existing data and re-ingest? [y/N]: ").strip().lower()
-        if response == "y":
-            client.delete_collection(CHROMA_COLLECTION)
-            collection = client.get_or_create_collection(CHROMA_COLLECTION)
-            print("Cleared existing collection.")
-        else:
-            print("Aborted. Existing data kept.")
-            sys.exit(0)
-
-    # Load all processed text files
-    if not any(PROCESSED_DIR.rglob("*.txt")):
+    all_files = get_all_processed_files()
+    if not all_files:
         print(f"No .txt files found in {PROCESSED_DIR}.")
-        print("Run fetch_wordpress_api.py or parse_wordpress.py first.")
+        print("Run fetch_wordpress_api.py or ocr_journals.py first.")
         sys.exit(1)
 
-    print(f"Loading documents from {PROCESSED_DIR}...")
+    if incremental:
+        # Only ingest files not previously ingested
+        ingested = load_ingested_files()
+        new_files = [f for f in all_files if str(f) not in ingested]
+
+        if not new_files:
+            print("No new files to ingest. Everything is up to date.")
+            return
+
+        print(f"Found {len(new_files)} new file(s) to ingest "
+              f"({len(ingested)} already ingested):")
+        for f in new_files:
+            print(f"  + {f.relative_to(PROCESSED_DIR)}")
+
+        files_to_ingest = new_files
+
+    else:
+        # Full ingest — warn if data already exists
+        existing_count = collection.count()
+        if existing_count > 0:
+            print(f"\nWarning: collection already has {existing_count} entries.")
+            print("Re-ingesting will create duplicate chunks and corrupt search results.")
+            response = input("Clear existing data and re-ingest? [y/N]: ").strip().lower()
+            if response == "y":
+                client.delete_collection(CHROMA_COLLECTION)
+                collection = client.get_or_create_collection(CHROMA_COLLECTION)
+                # Reset tracking file too
+                if TRACKING_FILE.exists():
+                    TRACKING_FILE.unlink()
+                print("Cleared existing collection.")
+            else:
+                print("Aborted. Use --incremental to add only new files.")
+                sys.exit(0)
+
+        files_to_ingest = all_files
+        print(f"Ingesting {len(files_to_ingest)} files...")
+
+    # Load only the files we need to ingest
     reader = SimpleDirectoryReader(
-        input_dir=str(PROCESSED_DIR),
-        recursive=True,
-        required_exts=[".txt"],
+        input_files=[str(f) for f in files_to_ingest],
     )
     documents = reader.load_data()
-    print(f"Loaded {len(documents)} documents")
+    print(f"Loaded {len(documents)} document chunks")
 
     vector_store = ChromaVectorStore(chroma_collection=collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
@@ -96,8 +138,26 @@ def ingest():
         show_progress=True,
     )
 
-    print(f"\nDone. {len(documents)} documents ingested into ChromaDB at {MEMORY_STORE_DIR}")
+    # Update tracking file
+    ingested = load_ingested_files()
+    ingested.update(str(f) for f in files_to_ingest)
+    save_ingested_files(ingested)
+
+    print(f"\nDone. {len(documents)} documents ingested.")
+    print(f"Total tracked files: {len(ingested)}")
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="Ingest processed files into ChromaDB.")
+    ap.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Only ingest new files not previously ingested. Safe to run repeatedly."
+    )
+    args = ap.parse_args()
+    ingest(incremental=args.incremental)
 
 
 if __name__ == "__main__":
-    ingest()
+    main()

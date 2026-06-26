@@ -3,6 +3,9 @@
 venv/
 .venv/
 
+# Personal glossary — keep names private (glossary.example.txt is committed)
+glossary.txt
+
 # Data — never commit personal content
 data/
 memory_store/

@@ -47,11 +47,19 @@ Think of it as a search engine for your life, powered by AI, that only you can a
 
 ## Why fully local / private?
 
-Journals contain your rawest, most honest thoughts. They are not for the cloud. This project uses:
-- **Ollama** — runs AI models locally on your Mac
+Journals contain your rawest, most honest thoughts. They are not for the cloud. The
+promise of this project is that **nothing leaves your machine**:
+- **Ollama** — runs the embedding and chat models locally on your Mac
 - **ChromaDB** — stores your memory index on your hard drive
-- No internet connection needed after setup
-- No third-party service ever sees your data
+- Every query, retrieval, and answer happens offline
+
+**The one remaining gap (temporary):** transcribing *handwritten* pages. Every local
+vision model tried so far (Apple Vision, llava, moondream, Tesseract, llama3.2-vision)
+failed on cursive, so for now — while the RAG side is being trialled — journal images
+are OCR'd through the Claude API. This is a stopgap, not the design: the intent is to
+move OCR back onto local llama3.2-vision once it reads the handwriting well, closing the
+loop so the system is fully offline again. Typed sources (blogs, notes) already never
+touch the cloud.
 
 ---
 
@@ -60,8 +68,8 @@ Journals contain your rawest, most honest thoughts. They are not for the cloud. 
 | Source | Format | Status |
 |--------|--------|--------|
 | Blog posts | Fetched via WordPress.com REST API (posts + images) | ✅ Done |
-| Personal journals (13 years) | Handwritten → scan → OCR | Phase 2 |
-| Written notes | Handwritten → scan → OCR | Phase 2 |
+| Personal journals (13 years) | Handwritten → scan → Claude-vision OCR | 🚧 Phase 2 |
+| Written notes | Handwritten → scan → Claude-vision OCR | 🚧 Phase 2 |
 | Photos | JPEG/PNG with date metadata | Phase 3 |
 
 ---
@@ -102,22 +110,26 @@ Your memories (journals, blogs, notes)
 - [x] Date range and source filters
 - [x] Code review, security audit, cleanup
 
-### Phase 2 — Handwritten Journals (next)
-- [ ] Scan pages with any phone camera → sync to Mac (Google Photos / USB)
-- [ ] Apple Vision OCR on Mac (processes images locally via Python)
-- [ ] Date extraction from handwritten headers
-- [ ] Merge journal entries into the same index as blogs
+### Phase 2 — Handwritten Journals (in progress)
+- [x] Scan pages (phone / scanner) → PDF, split into page images (`pdf_to_images.py`)
+- [x] Handwriting OCR via Claude vision (`ocr_journals.py`) — local models couldn't read cursive
+- [x] Date / time / day / location extraction from handwritten headers
+- [x] Merge journal entries into the same ChromaDB index as blogs (`ingest.py --incremental`)
+- [ ] Tune header detection across all 16 journals
+- [ ] **Move OCR onto local llama3.2-vision** — replace the Claude-API trial so the system is fully offline again
 
 ### Phase 3 — Photos
-- [ ] CLIP image embeddings for visual search
+- [ ] Migrate from ChromaDB to Qdrant (named vectors — text + image per record)
+- [ ] Llama 3.2 Vision → generate rich text description per photo (occasion, mood, people, place)
+- [ ] CLIP → generate visual embedding per photo
+- [ ] Store both vectors + description in Qdrant per photo
 - [ ] Link photos to journal entries by date
-- [ ] Search by visual content + date
+- [ ] Text query hits description vector, visual similarity hits CLIP vector
 
 ### Phase 4 — Polish
 - [ ] "On this day" feature — what were you doing exactly N years ago?
 - [ ] Timeline browser by year and month
 - [ ] Export memory summaries as PDFs
-- [ ] Migrate to Qdrant for multimodal (text + image) named vectors
 
 ---
 
@@ -135,11 +147,13 @@ Your memories (journals, blogs, notes)
 
 | What | Tool |
 |------|------|
-| AI brain | Llama 3.1 (via Ollama) |
-| Memory search | nomic-embed-text + ChromaDB |
+| Query LLM | Llama 3.1 (via Ollama, local) |
+| Handwriting OCR | llama3.2-vision (local) — *goal*; Claude vision (API) as a temporary trial |
+| Text embeddings | nomic-embed-text (via Ollama, local) |
+| Image embeddings (Phase 3) | CLIP (visual similarity) |
+| Vector store | ChromaDB → Qdrant (Phase 3) |
 | RAG framework | LlamaIndex |
-| Scanning | Any phone camera → sync to Mac |
-| Handwriting OCR | Apple Vision (runs on Mac, via Python) |
+| Scanning | Any phone camera / scanner → PDF |
 | UI | Streamlit |
 | Language | Python |
 

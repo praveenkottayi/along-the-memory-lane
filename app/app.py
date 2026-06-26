@@ -17,7 +17,14 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
-from config import CHROMA_COLLECTION, EMBED_MODEL, LLM_MODEL, MEMORY_STORE_DIR
+from config import (
+    CHROMA_COLLECTION,
+    EMBED_MODEL,
+    GLOSSARY_MAP,
+    LLM_MODEL,
+    MEMORY_STORE_DIR,
+    SYSTEM_PROMPT,
+)
 
 st.set_page_config(page_title="Along the Memory Lane", page_icon="📖", layout="wide")
 
@@ -28,7 +35,7 @@ st.caption("Query 13 years of memories — journals, blogs, notes")
 @st.cache_resource
 def load_index():
     Settings.embed_model = OllamaEmbedding(model_name=EMBED_MODEL)
-    Settings.llm = Ollama(model=LLM_MODEL, request_timeout=120.0)
+    Settings.llm = Ollama(model=LLM_MODEL, request_timeout=120.0, system_prompt=SYSTEM_PROMPT)
 
     client = chromadb.PersistentClient(path=str(MEMORY_STORE_DIR))
     try:
@@ -68,6 +75,17 @@ query = st.text_input(
     placeholder="e.g. 'What was I doing in Goa in 2015?' or 'memories about my first job'"
 )
 
+def expand_query(query: str) -> str:
+    """Expand shorthand names/abbreviations in query using the shared glossary.
+
+    Source of truth is glossary.txt (loaded in config as GLOSSARY_MAP), so the
+    same entries drive both retrieval expansion here and the LLM system prompt.
+    """
+    words = query.split()
+    expanded = [GLOSSARY_MAP.get(w.lower().rstrip("?.,"), w) for w in words]
+    return " ".join(expanded)
+
+
 if query:
     with st.spinner("Searching memories..."):
         try:
@@ -87,7 +105,7 @@ if query:
             fetch_k = min(top_k * 2, 20)
 
             retriever = index.as_retriever(similarity_top_k=fetch_k)
-            nodes = retriever.retrieve(query)
+            nodes = retriever.retrieve(expand_query(query))
 
             # Apply score threshold BEFORE sending to LLM
             filtered_nodes = [n for n in nodes if n.score is None or n.score >= score_threshold]
