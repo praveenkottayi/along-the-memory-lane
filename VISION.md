@@ -9,10 +9,10 @@ Imagine you kept a diary every day for 13 years. You wrote about your travels, y
 
 Now imagine being able to sit down and ask:
 
-- *"What was I feeling in the summer of 2014?"*
-- *"What were my goals when I turned 30?"*
-- *"Show me everything I wrote about my time in Goa."*
-- *"What did I think about my career back in 2018?"*
+- *"What do write most about ?"*
+- *"How my thinking changed over time ?"*
+- *"Where all I travelled in 2016?"*
+- *"............................."*
 
 And getting a thoughtful, accurate answer — drawn from your own words, your own memories.
 
