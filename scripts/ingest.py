@@ -70,9 +70,27 @@ def save_ingested_files(ingested: set[str]):
     TRACKING_FILE.write_text(json.dumps(sorted(ingested), indent=2))
 
 
+def has_front_matter(path: Path) -> bool:
+    """True if the file carries the front-matter header (date, source, ...).
+
+    Files without it are not memory entries but leftovers — e.g. full-journal
+    transcriptions that split_journal_txt.py splits into per-entry files, or
+    raw photo description dumps. Indexing them duplicates entries as undated
+    chunks that can't be filtered by date or source.
+    """
+    metadata, _ = parse_front_matter(path.read_text(encoding="utf-8"))
+    return bool(metadata.get("source"))
+
+
 def get_all_processed_files() -> list[Path]:
-    """Return all .txt files in the processed directory."""
-    return sorted(PROCESSED_DIR.rglob("*.txt"))
+    """Return all .txt files in the processed directory that have front matter."""
+    files = []
+    for f in sorted(PROCESSED_DIR.rglob("*.txt")):
+        if has_front_matter(f):
+            files.append(f)
+        else:
+            print(f"  Skipping (no front matter): {f.relative_to(PROCESSED_DIR)}")
+    return files
 
 
 def load_documents(files: list[Path]) -> list[Document]:
@@ -88,8 +106,7 @@ def load_documents(files: list[Path]) -> list[Document]:
 
     The metadata dict is attached to the Document so LlamaIndex propagates it
     to every chunk stored in ChromaDB — enabling date and source filtering in
-    the UI.  Files with no front-matter are ingested as plain text with an
-    empty metadata dict (graceful fallback).
+    the UI.  Files with no front-matter are skipped by get_all_processed_files().
     """
     docs = []
     for f in files:

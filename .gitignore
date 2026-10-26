@@ -10,6 +10,9 @@ glossary.txt
 data/
 memory_store/
 
+# Evaluation set — personal questions and results
+eval/
+
 # Python
 __pycache__/
 *.pyc
