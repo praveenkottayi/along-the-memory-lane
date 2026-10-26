@@ -70,7 +70,7 @@ touch the cloud.
 | Blog posts | Fetched via WordPress.com REST API (posts + images) | ✅ Done |
 | Personal journals (13 years) | Handwritten → scan → Claude-vision OCR | ✅ Done (journal #16 ingested; local OCR deferred) |
 | Written notes | Handwritten → scan → Claude-vision OCR | 🚧 Phase 2 |
-| Photos | JPEG/PNG with date metadata | Phase 3 |
+| Photos | JPEG/HEIC with EXIF date → llama3.2-vision description | 🚧 Phase 3 |
 
 ---
 
@@ -121,13 +121,15 @@ Your memories (journals, blogs, notes)
 - [x] Consistent metadata schema across all sources (date, title, source, journal)
 - [ ] **Move OCR onto local llama3.2-vision** — deferred until local vision models can read cursive reliably; Claude API remains the stopgap
 
-### Phase 3 — Photos
-- [ ] Migrate from ChromaDB to Qdrant (named vectors — text + image per record)
-- [ ] Llama 3.2 Vision → generate rich text description per photo (occasion, mood, people, place)
-- [ ] CLIP → generate visual embedding per photo
-- [ ] Store both vectors + description in Qdrant per photo
-- [ ] Link photos to journal entries by date
-- [ ] Text query hits description vector, visual similarity hits CLIP vector
+### Phase 3 — Photos (in progress)
+- [x] Architecture decision: llama3.2-vision text descriptions over ChromaDB (Option A)
+      — same pipeline as journals/blogs, no DB migration, single query across all sources
+- [x] `ingest_photos.py` — EXIF date extraction, llama3.2-vision description, sidecar
+      caching, front-matter .txt output; supports JPEG + HEIC (iPhone); `--all`, `--inspect`, `--dry-run`
+- [ ] Add `source: photo` to UI source filter options in `app/app.py`
+- [ ] Test end-to-end with a real album and tune the description prompt
+- [ ] Link photos to journal entries by date in the UI ("on this day" view)
+- [ ] (Future) Add CLIP visual embeddings + Qdrant if visual similarity search is needed
 
 ### Phase 4 — Polish
 - [ ] "On this day" feature — what were you doing exactly N years ago?

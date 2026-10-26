@@ -59,8 +59,8 @@ with st.sidebar:
     date_to = st.date_input("To date", value=None)
     source_filter = st.multiselect(
         "Source",
-        options=["blog", "journal", "notes"],
-        default=["blog", "journal", "notes"],
+        options=["blog", "journal", "photo", "notes"],
+        default=["blog", "journal", "photo", "notes"],
     )
     top_k = st.slider("Results to retrieve", min_value=3, max_value=20, value=5)
     score_threshold = st.slider(
@@ -97,7 +97,7 @@ if query:
                 filter_list.append(MetadataFilter(key="date", value=str(date_from), operator=FilterOperator.GTE))
             if date_to:
                 filter_list.append(MetadataFilter(key="date", value=str(date_to), operator=FilterOperator.LTE))
-            if source_filter and len(source_filter) < 3:
+            if source_filter and len(source_filter) < 4:
                 # Use OR so selecting "blog + journal" returns chunks from either source,
                 # not chunks that are simultaneously both (which would always be empty).
                 source_filters = [
@@ -142,6 +142,12 @@ if query:
                     title = meta.get("title", "Untitled")
 
                     with st.expander(f"[{source.upper()}] {date} — {title}"):
+                        if source == "photo":
+                            image_path = meta.get("image_path")
+                            if image_path and Path(image_path).exists():
+                                st.image(image_path, use_container_width=True)
+                            elif image_path:
+                                st.caption(f"📷 Image not found at: {image_path}")
                         st.write(node.text[:800] + ("..." if len(node.text) > 800 else ""))
                         if node.score:
                             st.caption(f"Relevance score: {node.score:.3f}")

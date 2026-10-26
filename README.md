@@ -61,6 +61,7 @@ brew install ollama
 ollama serve          # keep running in the background
 ollama pull llama3.1:8b-instruct-q4_0   # matches LLM_MODEL in config.py
 ollama pull nomic-embed-text             # matches EMBED_MODEL in config.py
+ollama pull llama3.2-vision              # matches PHOTO_VISION_MODEL — for photo descriptions
 ```
 
 ### 2. Set up the Python environment
@@ -117,6 +118,22 @@ python scripts/migrate_add_title.py              # safe to re-run; skips files t
 python scripts/ingest.py --incremental
 ```
 
+**Photos:**
+```bash
+# Drop a folder of photos (JPEG or HEIC) under data/raw/photos/<album-name>/
+# e.g. data/raw/photos/2015-goa/
+
+python scripts/ingest_photos.py --album data/raw/photos/2015-goa
+#   Flags:
+#     --all               process every album folder under data/raw/photos/
+#     --inspect           print cached descriptions without calling the vision model
+#     --dry-run           preview dates and cache status, no model calls, no writes
+#   Each photo's description is cached as photo.description.txt next to the image.
+#   Re-running skips already-described photos. HEIC (iPhone) and JPEG both supported.
+
+python scripts/ingest.py --incremental   # add photo descriptions to ChromaDB
+```
+
 **Rebuilding ChromaDB from scratch** (needed when the schema changes, or after a full re-OCR):
 ```bash
 python scripts/parse_claude_transcript.py   # re-parse any # transcripts
@@ -139,6 +156,8 @@ All tunable settings live in `config.py`. Change them there — every script pic
 |-----------|-------------------|---------|-----------------|
 | `EMBED_MODEL` | `EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model. Must match what was used when the index was built — changing it requires a full re-ingest. |
 | `LLM_MODEL` | `LLM_MODEL` | `llama3.1:8b-instruct-q4_0` | Ollama chat model used to synthesise answers. Safe to swap without re-ingesting. |
+| `PHOTO_VISION_MODEL` | `PHOTO_VISION_MODEL` | `llama3.2-vision` | Ollama vision model for photo descriptions. Fully local. Only called by `ingest_photos.py`. |
+| `PHOTO_DESCRIPTION_PROMPT` | `PHOTO_DESCRIPTION_PROMPT` | *(see config.py)* | Prompt sent to the vision model for each photo. Edit to change what the description focuses on. |
 | `OCR_VISION_MODEL` | `OCR_VISION_MODEL` | `claude-opus-4-8` | Claude model used for handwriting OCR. Only called by `ocr_journals.py`. |
 | `CHUNK_SIZE` | `CHUNK_SIZE` | `512` | Tokens per chunk when splitting documents before embedding. Larger = more context per result but lower precision. Journal entries are narrative — try 768–1024. |
 | `CHUNK_OVERLAP` | `CHUNK_OVERLAP` | `64` | Token overlap between consecutive chunks. Prevents a sentence being cut mid-thought at a boundary. ~10–15% of chunk size is a good rule of thumb. |
@@ -178,6 +197,8 @@ along-the-memory-lane/
 │   │                                   (--file, --dry-run)
 │   ├── migrate_add_title.py         ← one-time: stamp title into journal .txt files missing it
 │   │                                   (--dry-run); safe to re-run
+│   ├── ingest_photos.py             ← Phase 3: EXIF date + llama3.2-vision description → .txt
+│   │                                   (--album, --all, --inspect, --dry-run; HEIC + JPEG)
 │   └── ingest.py                    ← chunk + embed + store in ChromaDB
 │                                       (--incremental to add only new files)
 │
@@ -193,7 +214,7 @@ along-the-memory-lane/
 |-------|-------------|--------|
 | 1 | WordPress blog ingestion + local RAG query UI | ✅ Complete |
 | 2 | Handwritten journal OCR (PDF → Claude vision → entries) | ✅ Complete (local OCR deferred) |
-| 3 | Photo search — vision descriptions + CLIP visual embeddings via Qdrant | ⬜ Planned |
+| 3 | Photo search — llama3.2-vision descriptions → ChromaDB (same pipeline as journals) | 🚧 In progress |
 | 4 | "On This Day" feature + timeline browser | ⬜ Planned |
 
 ---

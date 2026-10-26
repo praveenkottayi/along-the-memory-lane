@@ -24,10 +24,27 @@ MEMORY_STORE_DIR = BASE_DIR / "memory_store"
 RAW_JOURNAL_DIR = RAW_DIR / "journal"
 RAW_BLOG_DIR = RAW_DIR / "blog"
 RAW_NOTES_DIR = RAW_DIR / "notes"
+RAW_PHOTOS_DIR = RAW_DIR / "photos"
 
 # Ollama models (local, used for embedding + chat)
 EMBED_MODEL = "nomic-embed-text"
 LLM_MODEL = "llama3.1:8b-instruct-q4_0"
+
+# Photo description — fully local via Ollama.
+# llama3.2-vision handles scene photos well (unlike cursive handwriting).
+# Run `ollama pull llama3.2-vision` once to download.
+
+
+# Prompt used to generate a text description of each photo.
+# Descriptions are embedded with nomic-embed-text and stored in ChromaDB alongside
+# journals and blogs — so a single query can return memories from all sources.
+PHOTO_DESCRIPTION_PROMPT = (
+    "Describe this personal photo in 3–5 sentences as if helping someone recall "
+    "this memory years later. Include: what is happening or the occasion, the setting "
+    "(indoor/outdoor, location type such as home/beach/restaurant/travel), the mood or "
+    "atmosphere, and any notable people, objects, or landmarks visible. "
+    "Be specific and evocative. Do not speculate about names or identities."
+)
 
 # Handwriting OCR — TEMPORARY: runs through the Anthropic API while the pipeline
 # is being trialled. Goal is fully local OCR (see VISION.md), but every local
@@ -37,6 +54,11 @@ LLM_MODEL = "llama3.1:8b-instruct-q4_0"
 # runner. Claude reads the handwriting cleanly, so it's the stopgap until
 # local vision works. Needs ANTHROPIC_API_KEY in the environment.
 OCR_VISION_MODEL = "claude-opus-4-8"
+PHOTO_VISION_MODEL = "gemma4:12b"
+PHOTO_VISION_OPTIONS = {
+    "think": False,   # disable reasoning mode — descriptions don't need it
+    "num_ctx": 2048,  # images don't need a large context window
+}
 
 # Glossary — single source of truth for personal names & abbreviations.
 # Lives in glossary.txt (gitignored to keep personal names private). It powers
@@ -92,5 +114,6 @@ CHUNK_OVERLAP = 64
 
 def ensure_dirs():
     """Create required data directories. Call once at script startup."""
-    for d in [RAW_JOURNAL_DIR, RAW_BLOG_DIR, RAW_NOTES_DIR, PROCESSED_DIR, MEMORY_STORE_DIR]:
+    for d in [RAW_JOURNAL_DIR, RAW_BLOG_DIR, RAW_NOTES_DIR, RAW_PHOTOS_DIR,
+              PROCESSED_DIR, MEMORY_STORE_DIR]:
         d.mkdir(parents=True, exist_ok=True)
