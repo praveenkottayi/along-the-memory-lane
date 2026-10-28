@@ -6,6 +6,7 @@ temporarily running through Claude vision while the local pipeline is being tune
 slated to move to a local vision model (see [Privacy](#privacy)).
 
 → See [VISION.md](./VISION.md) for the story behind this project.
+→ See [study-material.md](./study-material.md) for the theory: RAG, evaluation, tuning lessons and LangGraph.
 
 ---
 
@@ -445,6 +446,7 @@ Model, data and indexing settings live in `config.py`; retrieval defaults live i
 along-the-memory-lane/
 ├── VISION.md                   ← Project intention (start here)
 ├── README.md                   ← Technical setup (you are here)
+├── study-material.md           ← The theory behind it all (RAG, eval, LangGraph) — shareable
 ├── config.py                   ← All paths, models, prompt + glossary loading
 ├── rag.py                      ← Retrieval + answer functions (glossary, search, threshold, answer)
 ├── graph.py                    ← LangGraph pipeline: state + nodes + edges over rag.py (python graph.py → diagram)
