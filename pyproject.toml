@@ -23,4 +23,5 @@ dependencies = [
     "rich",
     "pymupdf>=1.27.2.3",
     "anthropic",
+    "langgraph>=1.2.18",
 ]

@@ -7,9 +7,12 @@ Usage:
     python scripts/evaluate.py --judge                 # also score answers with the local LLM as judge
     python scripts/evaluate.py --ids q01,q05,q13       # run a subset
     python scripts/evaluate.py --label hybrid --top-k 8 --threshold 0.4
+    python scripts/evaluate.py --pipeline graph        # run the LangGraph version (graph.py)
 
 Reads eval/questions.csv (gitignored — personal), runs every question through
-rag.py (the same pipeline the app uses) and writes a timestamped run folder:
+the same pipeline the app uses — the straight-line rag.py functions
+(`--pipeline linear`) or the LangGraph graph in graph.py (`--pipeline graph`) —
+and writes a timestamped run folder:
 
     eval/results/<YYYYmmdd-HHMM>_<label>/
         results.csv    one row per question (metrics, answer, retrieved chunks)
@@ -63,7 +66,8 @@ REFUSAL_PATTERNS = re.compile(
     r"(not|n't) (find|found|mention|contain|provide|include)|"
     r"nothing (relevant|about|was found)|"
     r"(don't|do not|cannot|can't) (know|recall|see)|"
-    r"unable to (find|locate)|no relevant",
+    r"(unable|not able) to (find|locate)|no relevant|"
+    r"(isn't|is not|there's no|there is no) any (mention|record|information)",
     re.IGNORECASE,
 )
 
@@ -197,10 +201,43 @@ def judge(judge_llm, q: dict, answer: str, kept_nodes) -> dict:
 # Run
 # ---------------------------------------------------------------------------
 
-def run_question(index, q: dict, args, judge_llm) -> dict:
+def run_linear(index, q: dict, args) -> tuple[list, list, str, float, float]:
+    """Straight-line pipeline: rag.retrieve() then rag.synthesize()."""
     t0 = time.perf_counter()
     kept_nodes, fetched_nodes = retrieve(index, q["question"], args.top_k, args.threshold)
     retrieval_s = time.perf_counter() - t0
+
+    answer, answer_s = "", 0.0
+    if not args.retrieval_only and kept_nodes:
+        t0 = time.perf_counter()
+        answer = synthesize(q["question"], kept_nodes)
+        answer_s = time.perf_counter() - t0
+    return kept_nodes, fetched_nodes, answer, retrieval_s, answer_s
+
+
+def run_graph(index, q: dict, args) -> tuple[list, list, str, float, float]:
+    """LangGraph pipeline, streamed node by node so each step can be timed.
+
+    With --retrieval-only the stream is stopped after the threshold node, so
+    the LLM never runs.
+    """
+    from graph import ask_stream
+
+    state, timings = {}, {}
+    t0 = time.perf_counter()
+    for node, changes in ask_stream(index, q["question"], args.top_k, args.threshold):
+        now = time.perf_counter()
+        timings[node], t0 = now - t0, now
+        state.update(changes or {})
+        if args.retrieval_only and node == "threshold":
+            break
+    retrieval_s = sum(v for k, v in timings.items() if k != "answer")
+    return state.get("chunks", []), state.get("fetched", []), state.get("answer", ""), retrieval_s, timings.get("answer", 0.0)
+
+
+def run_question(index, q: dict, args, judge_llm) -> dict:
+    runner = run_graph if args.pipeline == "graph" else run_linear
+    kept_nodes, fetched_nodes, answer, retrieval_s, answer_s = runner(index, q, args)
 
     kept = [node_info(n) for n in kept_nodes]
     fetched = [node_info(n) for n in fetched_nodes]
@@ -216,12 +253,7 @@ def run_question(index, q: dict, args, judge_llm) -> dict:
     if q["answerable"] and q["dates"]:
         row.update(retrieval_metrics(kept, fetched, q))
 
-    answer, answer_s = "", 0.0
     if not args.retrieval_only:
-        if kept_nodes:
-            t0 = time.perf_counter()
-            answer = synthesize(q["question"], kept_nodes)
-            answer_s = time.perf_counter() - t0
         # The app shows a "nothing found" warning when no chunk passes the threshold.
         refused = (not kept_nodes) or bool(REFUSAL_PATTERNS.search(answer))
         row.update({
@@ -251,7 +283,7 @@ def summarize(rows: list[dict], questions: list[dict], args) -> dict:
     kept_total = sum(r["n_kept"] for r in rows)
 
     summary = {
-        "run": args.run_name, "label": args.label, "model": LLM_MODEL,
+        "run": args.run_name, "label": args.label, "pipeline": args.pipeline, "model": LLM_MODEL,
         "top_k": args.top_k, "threshold": args.threshold, "questions": len(rows),
         "hit_rate": mean(r["hit"] for r in scored),
         "recall": mean(r["recall"] for r in scored),
@@ -368,6 +400,8 @@ def main():
     ap.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     ap.add_argument("--threshold", type=float, default=DEFAULT_SCORE_THRESHOLD)
     ap.add_argument("--ids", help="comma-separated question ids to run, e.g. q01,q05")
+    ap.add_argument("--pipeline", choices=["linear", "graph"], default="graph",
+                    help="graph = LangGraph (graph.py, what the app runs; default), linear = plain rag.py functions")
     ap.add_argument("--retrieval-only", action="store_true", help="skip answer generation (fast)")
     ap.add_argument("--judge", action="store_true", help="score answers with the local LLM as judge")
     args = ap.parse_args()

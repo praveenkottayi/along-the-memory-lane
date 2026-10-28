@@ -52,7 +52,7 @@ flowchart TD
     TXT --> SYNC --> EMBED --> STORE --> CHECK
 ```
 
-### 2. Answering a question — `rag.py`, shared by the app and the eval
+### 2. Answering a question — `graph.py` (LangGraph), shared by the app and the eval
 
 ```mermaid
 flowchart LR
@@ -150,7 +150,39 @@ ones in the index.
   chunks replaced, deleted files are removed. A full rebuild is only needed after
   changing the embedding model or chunk size.
 
-### 3. Answering a question (`rag.py`)
+### 3. Answering a question (`graph.py` + `rag.py`)
+
+The pipeline is a small [LangGraph](https://langchain-ai.github.io/langgraph/) graph
+(`graph.py`). Each step is a node that calls a plain function in `rag.py`; the
+nodes share one *state* (question, candidates, kept chunks, answer). The graph
+below is generated from the code (`python graph.py`):
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	expand(expand)
+	search(search)
+	threshold(threshold)
+	answer(answer)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> expand;
+	expand --> search;
+	search --> threshold;
+	threshold -.-> __end__;
+	threshold -.-> answer;
+	answer --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+
+The dotted lines are a **conditional edge**: if nothing passes the threshold the
+graph ends without calling the LLM. Steps:
 
 1. **Glossary expansion** — shorthand in the question is rewritten using
    `glossary.txt` (e.g. a nickname → "nickname (relation)").
@@ -162,8 +194,11 @@ ones in the index.
    (`tree_summarize`), with a system prompt telling it to say so when nothing
    relevant was found.
 
-`rag.py` is shared by the Streamlit app and the evaluation script, so the eval
-always measures exactly what the app runs.
+The app streams the graph step by step, so you see each step as it finishes.
+The same graph is used by the Streamlit app and the evaluation script, so the
+eval always measures exactly what the app runs. LlamaIndex still does all the
+indexing and retrieval; LangGraph only orchestrates the steps. LangSmith (the
+cloud tracing service) is not used.
 
 ---
 
@@ -192,7 +227,12 @@ assistant should say it doesn't know rather than invent something.
 python scripts/evaluate.py --retrieval-only --threshold 0.4 --label try04   # ~1 s, no LLM
 python scripts/evaluate.py --judge --label baseline                         # full run, ~5–7 min
 python scripts/evaluate.py --ids q01,q05 --label quick                      # subset
+python scripts/evaluate.py --pipeline linear --label compare                # the pre-graph rag.py pipeline
 ```
+
+`--pipeline graph` (the default — what the app runs) or `--pipeline linear` (the plain
+`rag.py` functions) lets you check that a change to the graph didn't change
+behaviour by accident.
 
 Each run writes `eval/results/<timestamp>_<label>/` (`results.csv`, a readable
 `answers.md`, `summary.json`) and adds a line to `eval/results/history.csv` for
@@ -222,6 +262,7 @@ Retrieval metrics are deterministic; judge scores from an 8B model vary by about
 | Threshold 0.5 → 0.4 | 0.83 | 0.68 | 0.68 | 3.7 / 5 | the threshold was the main bottleneck; answers ~2× slower (more context) |
 | Skip files without front matter | **0.86** | **0.73** | **0.76** | 3.5 / 5 | removed 63 undated duplicate chunks; unanswerable questions still refused 3/3 |
 | +2 new blog posts | 0.83 | 0.70 | 0.74 | — | not a pipeline change: a new post about birds seen from a window now outranks the older post about a balcony nest — similar topic, different event |
+| Step 0: pipeline as a LangGraph graph | 0.83 | 0.70 | 0.74 | 3.4 / 5 | same retrieval as the plain pipeline on all 32 questions; judge score equal (3.4 vs 3.4); answers still vary run to run (LLM sampling), not because of the graph |
 
 Still weak: questions hinging on a **name or place** (meaning-based search misses
 exact words), **date-specific** questions (nearby entries get mixed up), and
@@ -405,7 +446,8 @@ along-the-memory-lane/
 ├── VISION.md                   ← Project intention (start here)
 ├── README.md                   ← Technical setup (you are here)
 ├── config.py                   ← All paths, models, prompt + glossary loading
-├── rag.py                      ← Retrieval + answer pipeline (shared by app and eval)
+├── rag.py                      ← Retrieval + answer functions (glossary, search, threshold, answer)
+├── graph.py                    ← LangGraph pipeline: state + nodes + edges over rag.py (python graph.py → diagram)
 ├── pyproject.toml / uv.lock    ← Dependencies (requirements.txt mirrors these)
 ├── .env.example                ← Template for ANTHROPIC_API_KEY
 ├── glossary.example.txt        ← Template for personal names/abbreviations
@@ -440,7 +482,7 @@ along-the-memory-lane/
 │   ├── ingest.py                    ← chunk + embed + store in ChromaDB
 │   │                                   (--incremental syncs new/changed/deleted; --yes; skips files without front matter)
 │   └── evaluate.py                  ← score the pipeline on eval/questions.csv
-│                                       (--retrieval-only, --judge, --ids, --label)
+│                                       (--pipeline graph|linear, --retrieval-only, --judge, --ids, --label)
 │
 └── app/
     └── app.py                  ← Streamlit query UI
@@ -462,7 +504,7 @@ along-the-memory-lane/
 
 ## Roadmap
 
-Step 1 is on `main`. Steps 2–7 are built on the `langgraph` branch, one concept
+Step 1 is on `main`. Step 0 and steps 2–7 are built on the `langgraph` branch, one concept
 at a time, each measured with the eval before it's kept and merged into `main`. Design
 rules: everything stays local on Ollama; keep the graph shallow (every LLM step
 costs seconds on an 8B model); use plain rules where possible (dates) and the LLM
@@ -470,6 +512,7 @@ only for language.
 
 | # | Step | What it adds | Status |
 |---|---|---|---|
+| 0 | Pipeline as a LangGraph graph | same behaviour, rebuilt as nodes + state; app streams each step | ✅ Done — retrieval identical on all eval questions |
 | 1 | Evaluation set + harness | private questions with expected entries; hit rate, recall, MRR, answer scores | ✅ Done (+ threshold tuning, dedupe) |
 | 2 | Question → filters (self-query) | "in October 2025" becomes a date filter automatically | ⬜ Next |
 | 3 | Hybrid search + whole-entry answers | keyword search (BM25) alongside meaning search, so names and places are found; answers use the full entry | ⬜ |

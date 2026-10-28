@@ -10,6 +10,9 @@ llama-index-llms-ollama
 # Vector store
 chromadb
 
+# Orchestration — the query pipeline as a graph (graph.py)
+langgraph
+
 # Data parsing
 beautifulsoup4
 lxml

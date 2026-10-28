@@ -82,6 +82,35 @@ def build_filters(date_from=None, date_to=None, sources=None) -> MetadataFilters
     return MetadataFilters(filters=filter_list) if filter_list else None
 
 
+def search(
+    index: VectorStoreIndex,
+    query: str,
+    top_k: int = DEFAULT_TOP_K,
+    filters: MetadataFilters | None = None,
+) -> list[NodeWithScore]:
+    """Vector search for an (already expanded) query.
+
+    Fetches more than top_k so the score threshold can still leave enough.
+    """
+    fetch_k = min(top_k * 2, 20)
+    retriever = index.as_retriever(similarity_top_k=fetch_k, filters=filters)
+    return retriever.retrieve(query)
+
+
+def apply_threshold(
+    fetched: list[NodeWithScore],
+    top_k: int = DEFAULT_TOP_K,
+    score_threshold: float = DEFAULT_SCORE_THRESHOLD,
+) -> list[NodeWithScore]:
+    """Keep the chunks the LLM will see: score >= threshold, best top_k.
+
+    Applied BEFORE the LLM. None-scored chunks are excluded — they have no
+    relevance signal.
+    """
+    kept = [n for n in fetched if n.score is not None and n.score >= score_threshold]
+    return kept[:top_k]
+
+
 def retrieve(
     index: VectorStoreIndex,
     query: str,
@@ -89,21 +118,14 @@ def retrieve(
     score_threshold: float = DEFAULT_SCORE_THRESHOLD,
     filters: MetadataFilters | None = None,
 ) -> tuple[list[NodeWithScore], list[NodeWithScore]]:
-    """Retrieve chunks for a query.
+    """Retrieve chunks for a query: glossary expansion → search → threshold.
 
     Returns (kept, fetched): `fetched` is everything the vector search returned,
     `kept` is what passes the score threshold, capped at top_k — the chunks the
-    LLM will actually see.
+    LLM will actually see. graph.py runs the same three steps as graph nodes.
     """
-    # Retrieve more than top_k so we can apply score threshold and still have enough
-    fetch_k = min(top_k * 2, 20)
-    retriever = index.as_retriever(similarity_top_k=fetch_k, filters=filters)
-    fetched = retriever.retrieve(expand_query(query))
-
-    # Apply score threshold BEFORE sending to LLM.
-    # Exclude None-scored chunks — they have no relevance signal.
-    kept = [n for n in fetched if n.score is not None and n.score >= score_threshold]
-    return kept[:top_k], fetched
+    fetched = search(index, expand_query(query), top_k, filters)
+    return apply_threshold(fetched, top_k, score_threshold), fetched
 
 
 def synthesize(query: str, nodes: list[NodeWithScore]) -> str:
