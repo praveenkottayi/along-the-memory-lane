@@ -1,9 +1,9 @@
 # Along the Memory Lane 📖
 
-A fully local, private AI assistant for querying years of personal journals, blogs, and notes.
+A fully local, private AI assistant for querying years of personal journals, blogs and photos.
 **The goal is that nothing leaves your machine.** Today one step — handwriting OCR — is
 temporarily running through Claude vision while the local pipeline is being tuned; it is
-slated to move to local llama3.2-vision (see [Privacy](#privacy)).
+slated to move to a local vision model (see [Privacy](#privacy)).
 
 → See [VISION.md](./VISION.md) for the story behind this project.
 
@@ -11,47 +11,69 @@ slated to move to local llama3.2-vision (see [Privacy](#privacy)).
 
 ## Architecture
 
+### 1. Getting memories in — `scripts/update.py`
+
 ```mermaid
 flowchart TD
-    subgraph INPUT["📦 Your Raw Memories"]
-        J["📓 Handwritten Journals\n(scanned PDF / images)"]
-        B["🌐 Blog Posts\n(WordPress)"]
-        P["📷 Photos\n(JPEG / HEIC)"]
+    subgraph SOURCES["📦 Your raw memories"]
+        B["🌐 Blog posts<br/>(WordPress.com)"]
+        J["📓 Handwritten journals<br/>(scanned PDF)"]
+        P["📷 Photos<br/>(JPEG / HEIC albums)"]
     end
 
-    subgraph INGEST["🔄 Ingestion Pipeline"]
-        WP["📄 WordPress.com\nREST API"]
-        OCR["🔤 Handwriting OCR\n(Claude vision — API)"]
-        VIS["👁️ Photo description\n(gemma4 vision — local)\n+ EXIF date"]
-        TXT["📑 Processed .txt\n+ front-matter header\n(date, source, title)"]
-        EMBED["🧠 Chunk + embed\nnomic-embed-text\n(Ollama — local)"]
-        STORE["🗄️ ChromaDB\n(local)"]
+    subgraph BLOG["blog step"]
+        WP["fetch_wordpress_api.py<br/>only posts newer than<br/>the latest saved one"]
     end
 
-    subgraph QUERY["💬 Query — rag.py (fully local)"]
-        Q["You ask in plain English\n(Streamlit UI)"]
-        EXP["🔁 Glossary query\nexpansion"]
-        RETRIEVE["🔍 Semantic search\n+ score threshold"]
-        LLM["🤖 Llama 3.1\n(Ollama — local)"]
-        ANS["✅ Answer + source\nexcerpts"]
+    subgraph JOURNAL["journals step"]
+        OCR["Handwriting OCR — run by hand<br/>Claude vision (API) or<br/>Claude-chat transcript"]
+        SPLIT["parse_claude_transcript.py<br/>one file per dated entry"]
     end
 
-    subgraph EVAL["📏 Evaluation"]
-        QS["Private question set\n(eval/questions.csv)"]
-        SC["Scorecard\nhit rate, recall, MRR,\nanswer quality"]
+    subgraph PHOTO["photos step — ingest_photos.py"]
+        EXIF["EXIF date<br/>+ resize to 1024 px"]
+        VIS["👁️ Local vision model<br/>gemma4:12b — rich, ~50 s<br/>moondream — fast, ~1 s"]
+        CACHE["Description cache<br/>tagged with the model"]
     end
+
+    TXT["📑 data/processed/*.txt<br/>front matter: date · source · title<br/>(photos also: image_path)"]
+
+    subgraph INDEX["index step — ingest.py --incremental"]
+        SYNC["SHA-256 sync<br/>add new · update edited · remove deleted<br/>skip files without front matter"]
+        EMBED["🧠 Chunk (512 tokens)<br/>+ embed with nomic-embed-text"]
+        STORE[("🗄️ ChromaDB<br/>memory_store/")]
+    end
+
+    CHECK["📏 eval step<br/>quick retrieval check"]
 
     B --> WP --> TXT
-    J --> OCR --> TXT
-    P --> VIS --> TXT
-    TXT --> EMBED --> STORE
-
-    Q --> EXP --> RETRIEVE
-    STORE --> RETRIEVE --> LLM --> ANS
-
-    QS --> RETRIEVE
-    LLM --> SC
+    J --> OCR --> SPLIT --> TXT
+    P --> EXIF --> VIS --> CACHE --> TXT
+    TXT --> SYNC --> EMBED --> STORE --> CHECK
 ```
+
+### 2. Answering a question — `rag.py`, shared by the app and the eval
+
+```mermaid
+flowchart LR
+    Q["💬 You ask<br/>(Streamlit app)"] --> EXP["🔁 Glossary<br/>expansion"]
+    EXP --> RET["🔍 Semantic search<br/>top 10 chunks"]
+    STORE[("🗄️ ChromaDB")] --> RET
+    RET --> TH["✂️ Score ≥ 0.4<br/>keep best 5"]
+    TH --> LLM["🤖 Llama 3.1 8B<br/>answers from these<br/>chunks only"]
+    LLM --> ANS["✅ Answer + sources<br/>(photos shown as images)"]
+
+    subgraph EVAL["📏 scripts/evaluate.py"]
+        QS["eval/questions.csv<br/>questions + expected entries"]
+        SC["Scorecard → history.csv<br/>hit rate · recall · MRR<br/>key facts · LLM judge"]
+    end
+
+    QS -. same pipeline .-> EXP
+    TH -. retrieved entries .-> SC
+    LLM -. answers .-> SC
+```
+
+Everything runs locally on Ollama except handwriting OCR (see [Privacy](#privacy)).
 
 ---
 
@@ -64,8 +86,8 @@ with a small metadata header**, and from then on all sources are treated the sam
 
 | Source | How it becomes text | Script |
 |---|---|---|
-| Blog | Posts fetched from the WordPress API, HTML stripped | `fetch_wordpress_api.py` |
-| Handwritten journal | PDF → page images → handwriting OCR → split into **one file per dated entry** | `pdf_to_images.py`, `ocr_journals.py` or `split_journal_txt.py` |
+| Blog | Posts fetched from the WordPress API (only ones newer than the latest saved post), HTML stripped, images downloaded | `fetch_wordpress_api.py` |
+| Handwritten journal | PDF → page images → handwriting OCR, or a Claude-chat transcript → split into **one file per dated entry** | `pdf_to_images.py` + `ocr_journals.py`, or `parse_claude_transcript.py` |
 | Photo | A **local vision model** looks at the photo and writes a 3–5 sentence description; the date comes from the photo's EXIF data (falls back to the filename, then the folder name) | `ingest_photos.py` |
 
 Each file in `data/processed/` starts with a front-matter header:
@@ -75,7 +97,7 @@ Each file in `data/processed/` starts with a front-matter header:
 date: 2025-10-19
 source: journal          # blog | journal | photo
 title: Journal — 2025-10-19
----
+---                      # photos also carry image_path, so the app can show the image
 Body text…
 ```
 
@@ -85,7 +107,35 @@ machine) with `PHOTO_DESCRIPTION_PROMPT`, which asks what is happening, the sett
 the mood and notable objects. That description is cached in
 `data/processed/photos/<album>/descriptions/` (so re-runs skip photos already
 described) and written out as a normal text entry pointing back to the image. The
-app shows the original image next to the answer.
+app shows the original image next to the answer. Photos are shrunk to 1024 px on the
+longest side first (`PHOTO_MAX_SIDE`), which makes the model ~40% faster.
+
+#### Choosing the photo model
+
+Measured on this machine, same photos, 1024 px:
+
+| Model | Time per photo | Description quality |
+|---|---|---|
+| `gemma4:12b` (default) | ~50 s | 3–5 rich sentences: occasion, setting, mood, objects |
+| `moondream` | ~1 s | 1–2 short sentences, sometimes wrong (e.g. "urn of water on table") |
+
+So 200 photos take about **3 hours with Gemma** or **4 minutes with Moondream**.
+Good descriptions are what make photos findable, so Gemma is the default; a
+practical pattern is Moondream now for quick coverage, Gemma overnight to upgrade.
+Any other Ollama vision model works too — pull it and pass its name.
+
+```bash
+python scripts/ingest_photos.py --all --model moondream          # fast, new photos only
+python scripts/ingest_photos.py --all --model gemma4:12b --refresh   # upgrade descriptions from other models
+python scripts/ingest_photos.py --all --inspect                  # which model described each photo
+python scripts/update.py --photo-model moondream                 # same options via update.py
+```
+
+The cache records which model wrote each description. Without `--refresh`, an
+existing description is kept whichever model wrote it; with `--refresh`, photos
+described by a different model are redone. Run `update.py` (or
+`ingest.py --incremental`) afterwards and the changed descriptions replace the old
+ones in the index.
 
 ### 2. Indexing (`scripts/ingest.py`)
 
@@ -95,6 +145,10 @@ app shows the original image next to the answer.
 - Splits each entry into chunks of ~512 tokens (64 overlap).
 - Embeds each chunk with `nomic-embed-text` and stores it in ChromaDB; the header
   (date, source, title) is attached to every chunk so it can be filtered and shown.
+- `--incremental` keeps a SHA-256 fingerprint of every file in
+  `memory_store/ingested.json`: new files are added, edited files have their old
+  chunks replaced, deleted files are removed. A full rebuild is only needed after
+  changing the embedding model or chunk size.
 
 ### 3. Answering a question (`rag.py`)
 
@@ -167,11 +221,13 @@ Retrieval metrics are deterministic; judge scores from an 8B model vary by about
 | Baseline (threshold 0.5) | 0.52 | 0.42 | 0.45 | 2.6 / 5 | 14 of 32 questions retrieved nothing; hit rate *before* threshold was 0.90 |
 | Threshold 0.5 → 0.4 | 0.83 | 0.68 | 0.68 | 3.7 / 5 | the threshold was the main bottleneck; answers ~2× slower (more context) |
 | Skip files without front matter | **0.86** | **0.73** | **0.76** | 3.5 / 5 | removed 63 undated duplicate chunks; unanswerable questions still refused 3/3 |
+| +2 new blog posts | 0.83 | 0.70 | 0.74 | — | not a pipeline change: a new post about birds seen from a window now outranks the older post about a balcony nest — similar topic, different event |
 
 Still weak: questions hinging on a **name or place** (meaning-based search misses
-exact words) and **date-specific** questions (nearby entries get mixed up). Next
-planned improvements: date filters parsed from the question, then hybrid
-keyword + semantic search.
+exact words), **date-specific** questions (nearby entries get mixed up), and
+**similar topics** (the newest post on a theme crowds out the specific one). These
+are what the next steps of the [Roadmap](#roadmap) target. New content can shift
+results, which is why `update.py` ends with an eval check.
 
 ---
 
@@ -216,10 +272,13 @@ to "Anu (wife)" before retrieval and actually finds the right entries.
 
 **Blog (WordPress.com):**
 ```bash
-python scripts/fetch_wordpress_api.py   # posts + images from BLOG_SITE in config.py (or --site yoursite.com)
+python scripts/fetch_wordpress_api.py   # new posts + images from BLOG_SITE in config.py
+#   Flags:
+#     --all               re-fetch every post (only needed if you edited old posts)
+#     --site <domain>     a different WordPress.com site
 # Alternative, from a local XML export:
 # python scripts/parse_wordpress.py --input data/raw/blog/wordpress_export.xml
-python scripts/ingest.py
+python scripts/ingest.py --incremental
 ```
 
 **Handwritten journals** — two ways to transcribe, can be combined:
@@ -246,7 +305,7 @@ python scripts/migrate_add_title.py              # safe to re-run; skips files t
 #   Flags:
 #     --dry-run           preview which files would be patched
 
-# Add only newly written entries to ChromaDB (safe to run repeatedly):
+# Sync ChromaDB — adds new entries, updates edited ones (safe to run repeatedly):
 python scripts/ingest.py --incremental
 ```
 
@@ -260,6 +319,8 @@ python scripts/ingest_photos.py --album data/raw/photos/2015-goa
 #     --all               process every album folder under data/raw/photos/
 #     --inspect           print cached descriptions without calling the vision model
 #     --dry-run           preview dates and cache status, no model calls, no writes
+#     --model <name>      use another Ollama vision model for this run (e.g. moondream — fast)
+#     --refresh           re-describe photos whose description came from a different model
 #   Each description is cached in data/processed/photos/<album>/descriptions/.
 #   Re-running skips already-described photos. HEIC (iPhone) and JPEG both supported.
 
@@ -292,7 +353,7 @@ python scripts/update.py
 |---|---|---|
 | `blog` | Fetches posts newer than your latest saved one from `BLOG_SITE` (if offline, it warns and carries on) | `fetch_wordpress_api.py` |
 | `journals` | Turns `#<journal>.txt` transcripts into entries, adds missing titles | `parse_claude_transcript.py`, `migrate_add_title.py` |
-| `photos` | Describes **new** photos in every album with the local vision model (cached, so only new photos are processed; the first run on a big album can take 1–2 hours) | `ingest_photos.py --all` |
+| `photos` | Describes **new** photos in every album with the local vision model (cached, so only new photos are processed). With Gemma that's ~50 s per photo, so a first run on 200 photos takes ~3 hours; `--photo-model moondream` takes minutes | `ingest_photos.py --all` |
 | `index` | Syncs ChromaDB: adds new files, **updates edited ones**, removes deleted ones | `ingest.py --incremental` |
 | `eval` | ~1 s retrieval check against your question set, added to `eval/results/history.csv` | `evaluate.py --retrieval-only` |
 
@@ -300,6 +361,8 @@ python scripts/update.py
 python scripts/update.py --skip-photos          # quick update, skip the slow step
 python scripts/update.py --only blog --only index   # just these steps
 python scripts/update.py --full-eval            # end with the full eval (answers + judge)
+python scripts/update.py --photo-model moondream                   # fast photo descriptions
+python scripts/update.py --photo-model gemma4:12b --refresh-photos # upgrade other models' descriptions
 ```
 
 Every step is safe to re-run: unchanged files are skipped. The index sync knows
@@ -314,13 +377,15 @@ calls the Anthropic API — run it by hand when you scan a new journal, then run
 
 ## Hyperparameters
 
-Model and indexing settings live in `config.py`; retrieval defaults live in `rag.py`. Every script picks them up automatically. Re-run the eval after changing any of them.
+Model, data and indexing settings live in `config.py`; retrieval defaults live in `rag.py`. Every script picks them up automatically. Re-run the eval after changing any of them.
 
-| Parameter | Where in config.py | Default | What it controls |
+| Parameter | Where | Default | What it controls |
 |-----------|-------------------|---------|-----------------|
+| `BLOG_SITE` | `config.py` (or env var / `--site`) | your WordPress.com domain | Blog fetched by `fetch_wordpress_api.py` and `update.py`. |
 | `EMBED_MODEL` | `EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model. Must match what was used when the index was built — changing it requires a full re-ingest. |
 | `LLM_MODEL` | `LLM_MODEL` | `llama3.1:8b-instruct-q4_0` | Ollama chat model used to synthesise answers. Safe to swap without re-ingesting. |
-| `PHOTO_VISION_MODEL` | `PHOTO_VISION_MODEL` | `gemma4:12b` | Ollama vision model for photo descriptions. Fully local. Only called by `ingest_photos.py`. |
+| `PHOTO_VISION_MODEL` | `PHOTO_VISION_MODEL` (or env var / `--model`) | `gemma4:12b` | Ollama vision model for photo descriptions. Fully local. See [Choosing the photo model](#choosing-the-photo-model). |
+| `PHOTO_MAX_SIDE` | `PHOTO_MAX_SIDE` | `1024` | Photos are shrunk to this many pixels on the longest side before description. Smaller = faster. |
 | `PHOTO_DESCRIPTION_PROMPT` | `PHOTO_DESCRIPTION_PROMPT` | *(see config.py)* | Prompt sent to the vision model for each photo. Edit to change what the description focuses on. |
 | `OCR_VISION_MODEL` | `OCR_VISION_MODEL` | `claude-opus-4-8` | Claude model used for handwriting OCR. Only called by `ocr_journals.py`. |
 | `CHUNK_SIZE` | `CHUNK_SIZE` | `512` | Tokens per chunk when splitting documents before embedding. Larger = more context per result but lower precision. Journal entries are narrative — try 768–1024. |
@@ -346,10 +411,11 @@ along-the-memory-lane/
 ├── glossary.example.txt        ← Template for personal names/abbreviations
 │
 ├── data/                       ← gitignored — your personal content
-│   ├── raw/journal|blog|notes/ ← scanned PDFs/images, WordPress export
-│   └── processed/              ← parsed .txt files with metadata headers
+│   ├── raw/journal|blog|photos/ ← scanned PDFs, blog images, photo albums (raw/photos/<album>/)
+│   └── processed/              ← .txt entries with front matter: blog/, journal/<journal>/, photos/<album>/
+│                                  (photos/<album>/descriptions/ = vision-model cache, not indexed)
 │
-├── memory_store/               ← ChromaDB vector index (gitignored)
+├── memory_store/               ← ChromaDB vector index + ingested.json fingerprints (gitignored)
 │
 ├── eval/                       ← gitignored — private question set + run results
 │   ├── questions.csv
@@ -357,7 +423,7 @@ along-the-memory-lane/
 │
 ├── scripts/
 │   ├── common.py                    ← shared helpers: front-matter r/w, journal text parsers, slug/HTML utils
-│   ├── fetch_wordpress_api.py       ← fetch posts + images from a live WordPress.com site
+│   ├── fetch_wordpress_api.py       ← fetch new posts + images from a WordPress.com site (--all, --site)
 │   ├── parse_wordpress.py           ← alternative: parse a local WordPress XML export
 │   ├── pdf_to_images.py             ← scanned journal PDF → page images
 │   ├── ocr_journals.py              ← Claude-vision OCR of journal images → entry .txt files
@@ -366,10 +432,11 @@ along-the-memory-lane/
 │   │                                   (--file, --dry-run)
 │   ├── migrate_add_title.py         ← one-time: stamp title into journal .txt files missing it
 │   │                                   (--dry-run); safe to re-run
-│   ├── split_journal_txt.py         ← split a full-journal transcription into one file per entry
+│   ├── split_journal_txt.py         ← older alternative to parse_claude_transcript.py
 │   ├── ingest_photos.py             ← Phase 3: EXIF date + local vision description → .txt
-│   │                                   (--album, --all, --inspect, --dry-run; HEIC + JPEG)
+│   │                                   (--album, --all, --model, --refresh, --inspect, --dry-run; HEIC + JPEG)
 │   ├── update.py                    ← one command: blog → journals → photos → index → eval check
+│   │                                   (--skip-X, --only X, --photo-model, --refresh-photos, --full-eval)
 │   ├── ingest.py                    ← chunk + embed + store in ChromaDB
 │   │                                   (--incremental syncs new/changed/deleted; --yes; skips files without front matter)
 │   └── evaluate.py                  ← score the pipeline on eval/questions.csv
@@ -387,9 +454,29 @@ along-the-memory-lane/
 |-------|-------------|--------|
 | 1 | WordPress blog ingestion + local RAG query UI | ✅ Complete |
 | 2 | Handwritten journal OCR (PDF → Claude vision → entries) | ✅ Complete (local OCR deferred) |
-| 3 | Photo search — local vision descriptions → ChromaDB (same pipeline as journals) | 🚧 In progress |
-| 4 | "On This Day" feature + timeline browser | ⬜ Planned |
-| — | RAG evaluation harness + tuning (`langgraph` branch) | ✅ Baseline done |
+| 3 | Photo search — local vision descriptions → ChromaDB (same pipeline as journals) | ✅ Pipeline complete — most photos still need (re)describing with Gemma |
+| — | One-command updates (`update.py`), incremental fetch + index sync | ✅ Complete |
+| 4 | "On This Day" feature + timeline browser | ⬜ Planned (Roadmap step 7) |
+
+---
+
+## Roadmap
+
+Work on the `langgraph` branch (`main` keeps the plain LlamaIndex version). One
+concept at a time, each one measured with the eval before it's kept. Design
+rules: everything stays local on Ollama; keep the graph shallow (every LLM step
+costs seconds on an 8B model); use plain rules where possible (dates) and the LLM
+only for language.
+
+| # | Step | What it adds | Status |
+|---|---|---|---|
+| 1 | Evaluation set + harness | private questions with expected entries; hit rate, recall, MRR, answer scores | ✅ Done (+ threshold tuning, dedupe) |
+| 2 | Question → filters (self-query) | "in October 2025" becomes a date filter automatically | ⬜ Next |
+| 3 | Hybrid search + whole-entry answers | keyword search (BM25) alongside meaning search, so names and places are found; answers use the full entry | ⬜ |
+| 4 | LangGraph router | separate routes for lookup, aggregate ("where all did I travel…") and timeline ("how did my thinking change…") questions | ⬜ |
+| 5 | Corrective loop | check relevance → rewrite the query → retry, at most twice | ⬜ |
+| 6 | Conversation memory | follow-ups like "and the year after?" | ⬜ |
+| 7 | Ingest-time enrichment + "On this day" | tag entries with people, places and mood; query by emotion or person | ⬜ |
 
 ---
 
@@ -409,7 +496,7 @@ The goal is uncompromising: **nothing leaves your machine.**
 Local vision models tried so far (Apple Vision, llava, moondream, Tesseract,
 llama3.2-vision) couldn't reliably read cursive, so while the RAG side is being
 trialled, journal page **images** are transcribed via the Claude API. This is a
-stopgap, not the destination — the plan is to move OCR back to local
-llama3.2-vision once it reads the handwriting well. Even now it runs only when you
+stopgap, not the destination — the plan is to move OCR to a local vision
+model once one reads the handwriting well. Even now it runs only when you
 OCR journals, sends images only (never the index or your queries), and is skipped
 entirely if you ingest only typed sources (blogs, notes).

@@ -6,8 +6,9 @@ journals and blogs. Fully local: no API calls, no data leaves the machine.
 
 How it works:
   1. Extract the date from EXIF metadata (falls back to filename then folder name).
-  2. Run llama3.2-vision (via Ollama) to generate a text description of the photo.
-  3. Cache the description as a sidecar <photo>.description.txt next to the image.
+  2. Run the local vision model (PHOTO_VISION_MODEL, via Ollama) to describe the photo.
+  3. Cache the description in data/processed/photos/<album>/descriptions/,
+     tagged with the model that wrote it.
   4. Write a standard front-matter .txt to data/processed/photos/<album>/
   5. Run `python scripts/ingest.py --incremental` to embed and store in ChromaDB.
 
@@ -24,11 +25,17 @@ Usage:
     # Preview what would be written without touching files (no Ollama calls)
     python scripts/ingest_photos.py --album data/raw/photos/2015-goa --dry-run
 
-    # Show cached descriptions without re-running vision
+    # Show cached descriptions (and which model wrote each) without re-running vision
     python scripts/ingest_photos.py --album data/raw/photos/2015-goa --inspect
 
+    # Use a different vision model for this run (new photos only)
+    python scripts/ingest_photos.py --all --model moondream
+
+    # Re-describe photos whose description came from a different model
+    python scripts/ingest_photos.py --all --model gemma4:12b --refresh
+
 Prerequisites:
-    ollama pull llama3.2-vision   # once, to download the model
+    ollama pull gemma4:12b        # once, to download the default model (config.PHOTO_VISION_MODEL)
     pip install pillow-heif       # for HEIC support (iPhone photos)
 """
 import argparse
@@ -45,6 +52,7 @@ from PIL.ExifTags import TAGS
 from common import front_matter
 from config import (
     PHOTO_DESCRIPTION_PROMPT,
+    PHOTO_MAX_SIDE,
     PHOTO_VISION_MODEL,
     PHOTO_VISION_OPTIONS,
     PROCESSED_DIR,
@@ -128,11 +136,13 @@ def load_image_bytes(image_path: Path) -> bytes | None:
 
     Pixel motion photos embed a short video after the JPEG data — most vision
     models choke on the extra bytes. We re-encode via Pillow to strip the video
-    and return a clean JPEG buffer.
+    and return a clean JPEG buffer, shrunk to PHOTO_MAX_SIDE on the longest side
+    (full camera resolution only slows the model down).
     """
     try:
         img = Image.open(image_path)
         img = img.convert("RGB")  # ensure no alpha / palette issues
+        img.thumbnail((PHOTO_MAX_SIDE, PHOTO_MAX_SIDE))
         import io
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=90)
@@ -154,7 +164,18 @@ def sidecar_path(image_path: Path, album_dir: Path) -> Path:
     return desc_dir / f"{image_path.stem}.description.txt"
 
 
-def describe_photo(image_path: Path, album_dir: Path) -> str:
+def read_cache(cache: Path) -> tuple[str, str]:
+    """Return (model tag, description) from a cache file, or ("", "") if unusable."""
+    if not cache.exists():
+        return "", ""
+    lines = cache.read_text(encoding="utf-8").splitlines()
+    model_tag = lines[0].strip() if lines else ""
+    body = "\n".join(lines[2:]).strip() if len(lines) > 2 else ""
+    return model_tag, body
+
+
+def describe_photo(image_path: Path, album_dir: Path, model: str = PHOTO_VISION_MODEL,
+                   refresh: bool = False) -> str:
     """Run the vision model on a photo and return a text description.
 
     Results are cached as sidecar files under
@@ -169,16 +190,12 @@ def describe_photo(image_path: Path, album_dir: Path) -> str:
     and makes it safe to swap models and selectively re-generate.
 
     Empty results are never cached — the next run will retry automatically.
+    A cached description from another model is reused unless `refresh` is set.
     """
     cache = sidecar_path(image_path, album_dir)
-    if cache.exists():
-        lines = cache.read_text(encoding="utf-8").splitlines()
-        # Skip the model header (first line) and blank separator
-        body = "\n".join(lines[2:]).strip() if len(lines) > 2 else ""
-        if body:
-            return body
-        # Empty or corrupt cache — delete and retry
-        cache.unlink()
+    model_tag, body = read_cache(cache)
+    if body and (model_tag == model or not refresh):
+        return body
 
     try:
         import ollama
@@ -195,7 +212,7 @@ def describe_photo(image_path: Path, album_dir: Path) -> str:
 
     try:
         response = ollama.chat(
-            model=PHOTO_VISION_MODEL,
+            model=model,
             messages=[{
                 "role": "user",
                 "content": PHOTO_DESCRIPTION_PROMPT,
@@ -210,7 +227,7 @@ def describe_photo(image_path: Path, album_dir: Path) -> str:
 
     # Only cache if the model returned something useful
     if description:
-        cache.write_text(f"{PHOTO_VISION_MODEL}\n\n{description}", encoding="utf-8")
+        cache.write_text(f"{model}\n\n{description}", encoding="utf-8")
 
     return description
 
@@ -250,7 +267,8 @@ def get_album_images(album_dir: Path) -> list[Path]:
     ])
 
 
-def process_album(album_dir: Path, output_dir: Path, dry_run: bool = False) -> int:
+def process_album(album_dir: Path, output_dir: Path, dry_run: bool = False,
+                  model: str = PHOTO_VISION_MODEL, refresh: bool = False) -> int:
     """Describe all photos in an album and write processed .txt files.
 
     Returns the number of photos processed.
@@ -268,7 +286,8 @@ def process_album(album_dir: Path, output_dir: Path, dry_run: bool = False) -> i
         print(f"  No images found in {album_dir}")
         return 0
 
-    print(f"\nProcessing album: {album_name} ({len(images)} images)")
+    print(f"\nProcessing album: {album_name} ({len(images)} images) — model: {model}"
+          f"{' (refreshing other models)' if refresh else ''}")
 
     if not dry_run:
         out_dir = output_dir / "photos" / album_name
@@ -283,11 +302,19 @@ def process_album(album_dir: Path, output_dir: Path, dry_run: bool = False) -> i
         date = resolve_date(img_path)
 
         if dry_run:
-            cache = sidecar_path(img_path, album_dir)
-            print(f"  date={date}  {'(cached)' if cache.exists() else '(needs vision)'}")
+            model_tag, body = read_cache(sidecar_path(img_path, album_dir))
+            if not body:
+                status = "(needs vision)"
+            elif model_tag == model or not refresh:
+                status = f"(cached: {model_tag})"
+            else:
+                status = f"(re-describe: was {model_tag})"
+            print(f"  date={date}  {status}")
             continue
 
-        description = describe_photo(img_path, album_dir)
+        cache = sidecar_path(img_path, album_dir)
+        before = read_cache(cache)
+        description = describe_photo(img_path, album_dir, model, refresh)
 
         if not description:
             print(f"  → skipped (no description)")
@@ -301,8 +328,7 @@ def process_album(album_dir: Path, output_dir: Path, dry_run: bool = False) -> i
         txt = build_processed_txt(img_path, album_name, date, description)
         (out_dir / filename).write_text(txt, encoding="utf-8")
 
-        cache = sidecar_path(img_path, album_dir)
-        sidecar_status = "→ cached" if cache.exists() else "→ described"
+        sidecar_status = "→ cached" if read_cache(cache) == before and before[1] else "→ described"
         print(f"  {sidecar_status}  [{date}]")
         saved += 1
 
@@ -336,7 +362,7 @@ def inspect_album(album_dir: Path):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Describe photos with llama3.2-vision and prepare them for ChromaDB ingestion."
+        description="Describe photos with a local vision model and prepare them for ChromaDB ingestion."
     )
     source = ap.add_mutually_exclusive_group()
     source.add_argument(
@@ -358,6 +384,16 @@ def main():
         action="store_true",
         help="Print cached descriptions without running the vision model",
     )
+    ap.add_argument(
+        "--model",
+        default=PHOTO_VISION_MODEL,
+        help=f"Ollama vision model to use (default: {PHOTO_VISION_MODEL}, from config.PHOTO_VISION_MODEL)",
+    )
+    ap.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-describe photos whose cached description came from a different model",
+    )
     args = ap.parse_args()
 
     ensure_dirs()
@@ -370,7 +406,8 @@ def main():
         if args.inspect:
             inspect_album(album_dir)
         else:
-            saved = process_album(album_dir, PROCESSED_DIR, dry_run=args.dry_run)
+            saved = process_album(album_dir, PROCESSED_DIR, dry_run=args.dry_run,
+                                  model=args.model, refresh=args.refresh)
             if not args.dry_run:
                 print(f"\n  Done. {saved} photo(s) written.")
                 print("  Next: python scripts/ingest.py --incremental")
@@ -391,7 +428,8 @@ def main():
             if args.inspect:
                 inspect_album(album_dir)
             else:
-                total += process_album(album_dir, PROCESSED_DIR, dry_run=args.dry_run)
+                total += process_album(album_dir, PROCESSED_DIR, dry_run=args.dry_run,
+                                       model=args.model, refresh=args.refresh)
 
         if not args.dry_run and not args.inspect:
             print(f"\nTotal: {total} photo(s) processed.")

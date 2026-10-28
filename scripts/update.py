@@ -7,6 +7,8 @@ Usage:
     python scripts/update.py --skip-photos      # skip the slow photo descriptions
     python scripts/update.py --only blog        # just one step (repeatable: --only blog --only index)
     python scripts/update.py --full-eval        # finish with the full eval (answers + judge, ~5–7 min)
+    python scripts/update.py --photo-model moondream          # fast photo descriptions (~1 s vs ~50 s each)
+    python scripts/update.py --photo-model gemma4:12b --refresh-photos   # upgrade photos described by another model
 
 Steps (each is an existing script, run in order):
     blog      fetch_wordpress_api.py          fetch posts newer than the latest saved one (config.BLOG_SITE)
@@ -54,6 +56,9 @@ def main():
     ap.add_argument("--only", action="append", choices=STEPS, help="run only these steps")
     for step in STEPS:
         ap.add_argument(f"--skip-{step}", action="store_true", help=f"skip the {step} step")
+    ap.add_argument("--photo-model", help="vision model for photo descriptions (default: config.PHOTO_VISION_MODEL)")
+    ap.add_argument("--refresh-photos", action="store_true",
+                    help="re-describe photos whose description came from a different model")
     ap.add_argument("--full-eval", action="store_true", help="run the full eval (answers + judge) instead of the quick check")
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # keep our headers in order with the child scripts' output
@@ -80,7 +85,12 @@ def main():
              and run("Add missing journal titles", "migrate_add_title.py"))
 
     if "photos" in selected:
-        step("photos", run("Describe new photos", "ingest_photos.py", "--all"))
+        photo_args = ["--all"]
+        if args.photo_model:
+            photo_args += ["--model", args.photo_model]
+        if args.refresh_photos:
+            photo_args.append("--refresh")
+        step("photos", run("Describe new photos", "ingest_photos.py", *photo_args))
 
     if "index" in selected:
         step("index", run("Sync ChromaDB", "ingest.py", "--incremental"))

@@ -57,7 +57,14 @@ PHOTO_DESCRIPTION_PROMPT = (
 # runner. Claude reads the handwriting cleanly, so it's the stopgap until
 # local vision works. Needs ANTHROPIC_API_KEY in the environment.
 OCR_VISION_MODEL = "claude-opus-4-8"
-PHOTO_VISION_MODEL = "gemma4:12b"
+# Default vision model for photo descriptions. Override per run with
+# `ingest_photos.py --model <name>` or the PHOTO_VISION_MODEL env var.
+#   gemma4:12b  — best descriptions (default), slowest
+#   moondream   — much faster, but short and often wrong ("urn of water on table")
+PHOTO_VISION_MODEL = os.getenv("PHOTO_VISION_MODEL", "gemma4:12b")
+# Photos are shrunk so their longest side is at most this many pixels before
+# being sent to the vision model — much faster, with little loss of detail.
+PHOTO_MAX_SIDE = 1024
 PHOTO_VISION_OPTIONS = {
     "think": False,   # disable reasoning mode — descriptions don't need it
     "num_ctx": 2048,  # images don't need a large context window
