@@ -462,8 +462,8 @@ along-the-memory-lane/
 
 ## Roadmap
 
-Work on the `langgraph` branch (`main` keeps the plain LlamaIndex version). One
-concept at a time, each one measured with the eval before it's kept. Design
+Step 1 is on `main`. Steps 2–7 are built on the `langgraph` branch, one concept
+at a time, each measured with the eval before it's kept and merged into `main`. Design
 rules: everything stays local on Ollama; keep the graph shallow (every LLM step
 costs seconds on an 8B model); use plain rules where possible (dates) and the LLM
 only for language.
