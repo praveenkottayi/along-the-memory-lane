@@ -2,8 +2,9 @@
 Ingest processed text files into ChromaDB via LlamaIndex.
 
 Usage:
-    python scripts/ingest.py                  # full ingest (warns if data exists)
-    python scripts/ingest.py --incremental    # only ingest new files
+    python scripts/ingest.py                  # full rebuild (asks before wiping)
+    python scripts/ingest.py --yes            # full rebuild, no prompt
+    python scripts/ingest.py --incremental    # sync: add new, update changed, remove deleted
 
 Reads all .txt files from data/processed/, parses their front-matter header
 into document metadata (date, source, title, etc.), chunks the body, embeds
@@ -13,9 +14,13 @@ Metadata is propagated to every chunk so the UI filters (date range, source)
 work correctly. This relies on parse_front_matter() in common.py — the same
 format used by all ingestion scripts (fetch_wordpress_api, ocr_journals, etc.).
 
-Incremental mode tracks ingested files in memory_store/ingested.json
-so re-running only adds new content — safe to run after adding journals.
+Incremental mode keeps a content fingerprint (SHA-256) of every ingested file
+in memory_store/ingested.json, so re-running only touches what changed:
+new files are added, edited files (e.g. an updated blog post or a re-described
+photo) have their old chunks replaced, and deleted files have their chunks
+removed. Safe to run as often as you like.
 """
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -58,16 +63,32 @@ def get_chroma_collection():
     return client, collection
 
 
-def load_ingested_files() -> set[str]:
-    """Load the set of already-ingested file paths from tracking file."""
-    if TRACKING_FILE.exists():
-        return set(json.loads(TRACKING_FILE.read_text()))
-    return set()
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def save_ingested_files(ingested: set[str]):
-    """Persist the set of ingested file paths to tracking file."""
-    TRACKING_FILE.write_text(json.dumps(sorted(ingested), indent=2))
+def load_ingested_files() -> dict[str, str | None]:
+    """Load {file path: content hash} for already-ingested files.
+
+    Older tracking files are a plain list of paths with no hashes; those
+    entries get hash None, so the next sync re-embeds them once.
+    """
+    if not TRACKING_FILE.exists():
+        return {}
+    data = json.loads(TRACKING_FILE.read_text())
+    if isinstance(data, list):
+        return {path: None for path in data}
+    return data
+
+
+def save_ingested_files(ingested: dict[str, str | None]):
+    """Persist {file path: content hash} to the tracking file."""
+    TRACKING_FILE.write_text(json.dumps(dict(sorted(ingested.items())), indent=2))
+
+
+def delete_file_chunks(collection, path: str):
+    """Remove every chunk that came from one source file."""
+    collection.delete(where={"file_path": path})
 
 
 def has_front_matter(path: Path) -> bool:
@@ -84,12 +105,13 @@ def has_front_matter(path: Path) -> bool:
 
 def get_all_processed_files() -> list[Path]:
     """Return all .txt files in the processed directory that have front matter."""
-    files = []
+    files, skipped = [], []
     for f in sorted(PROCESSED_DIR.rglob("*.txt")):
-        if has_front_matter(f):
-            files.append(f)
-        else:
-            print(f"  Skipping (no front matter): {f.relative_to(PROCESSED_DIR)}")
+        (files if has_front_matter(f) else skipped).append(f)
+    if skipped:
+        # Mostly photo description caches (photos/<album>/descriptions/) — expected.
+        print(f"  Skipping {len(skipped)} file(s) without front matter, e.g. "
+              f"{skipped[0].relative_to(PROCESSED_DIR)}")
     return files
 
 
@@ -121,7 +143,69 @@ def load_documents(files: list[Path]) -> list[Document]:
     return docs
 
 
-def ingest(incremental: bool = False):
+def embed_files(collection, files: list[Path]) -> int:
+    """Chunk, embed and store files. Returns the number of documents ingested."""
+    documents = load_documents(files)
+    if not documents:
+        return 0
+    vector_store = ChromaVectorStore(chroma_collection=collection)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    print(f"Chunking and embedding {len(documents)} document(s)...")
+    VectorStoreIndex.from_documents(documents, storage_context=storage_context, show_progress=True)
+    return len(documents)
+
+
+def sync(collection, all_files: list[Path]):
+    """Bring ChromaDB in line with data/processed/: add, update, remove."""
+    tracked = load_ingested_files()
+    current = {str(f): file_hash(f) for f in all_files}
+
+    new = [p for p in current if p not in tracked]
+    changed = [p for p in current if p in tracked and tracked[p] != current[p]]
+    removed = [p for p in tracked if p not in current]
+
+    if not (new or changed or removed):
+        print("Everything is up to date.")
+        return
+
+    print(f"New: {len(new)}   Changed: {len(changed)}   Removed: {len(removed)}")
+    for label, paths in (("+", new), ("~", changed), ("-", removed)):
+        for p in paths[:20]:
+            print(f"  {label} {Path(p).relative_to(PROCESSED_DIR) if p.startswith(str(PROCESSED_DIR)) else p}")
+        if len(paths) > 20:
+            print(f"  {label} ... and {len(paths) - 20} more")
+
+    # Old chunks of changed and removed files go first, so nothing is duplicated.
+    for p in changed + removed:
+        delete_file_chunks(collection, p)
+        tracked.pop(p, None)
+
+    embed_files(collection, [Path(p) for p in new + changed])
+    for p in new + changed:
+        tracked[p] = current[p]
+    save_ingested_files(tracked)
+    print(f"\nDone. {collection.count()} chunks from {len(tracked)} files.")
+
+
+def rebuild(client, collection, all_files: list[Path], assume_yes: bool):
+    """Wipe the collection and ingest everything from scratch."""
+    if collection.count() > 0:
+        print(f"\nCollection has {collection.count()} chunks; a full rebuild wipes them.")
+        if not assume_yes:
+            response = input("Clear existing data and re-ingest? [y/N]: ").strip().lower()
+            if response != "y":
+                print("Aborted. Use --incremental to sync only what changed.")
+                sys.exit(0)
+        client.delete_collection(CHROMA_COLLECTION)
+        collection = client.get_or_create_collection(CHROMA_COLLECTION)
+        print("Cleared existing collection.")
+
+    embed_files(collection, all_files)
+    save_ingested_files({str(f): file_hash(f) for f in all_files})
+    print(f"\nDone. {collection.count()} chunks from {len(all_files)} files.")
+
+
+def ingest(incremental: bool = False, assume_yes: bool = False):
     ensure_dirs()
 
     print("Setting up models...")
@@ -137,63 +221,9 @@ def ingest(incremental: bool = False):
         sys.exit(1)
 
     if incremental:
-        # Only ingest files not previously ingested
-        ingested = load_ingested_files()
-        new_files = [f for f in all_files if str(f) not in ingested]
-
-        if not new_files:
-            print("No new files to ingest. Everything is up to date.")
-            return
-
-        print(f"Found {len(new_files)} new file(s) to ingest "
-              f"({len(ingested)} already ingested):")
-        for f in new_files:
-            print(f"  + {f.relative_to(PROCESSED_DIR)}")
-
-        files_to_ingest = new_files
-
+        sync(collection, all_files)
     else:
-        # Full ingest — warn if data already exists
-        existing_count = collection.count()
-        if existing_count > 0:
-            print(f"\nWarning: collection already has {existing_count} entries.")
-            print("Re-ingesting will create duplicate chunks and corrupt search results.")
-            response = input("Clear existing data and re-ingest? [y/N]: ").strip().lower()
-            if response == "y":
-                client.delete_collection(CHROMA_COLLECTION)
-                collection = client.get_or_create_collection(CHROMA_COLLECTION)
-                # Reset tracking file too
-                if TRACKING_FILE.exists():
-                    TRACKING_FILE.unlink()
-                print("Cleared existing collection.")
-            else:
-                print("Aborted. Use --incremental to add only new files.")
-                sys.exit(0)
-
-        files_to_ingest = all_files
-        print(f"Ingesting {len(files_to_ingest)} files...")
-
-    # Load files with front-matter parsed into document metadata
-    documents = load_documents(files_to_ingest)
-    print(f"Loaded {len(documents)} documents")
-
-    vector_store = ChromaVectorStore(chroma_collection=collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-    print("Chunking and embedding (this may take a while)...")
-    VectorStoreIndex.from_documents(
-        documents,
-        storage_context=storage_context,
-        show_progress=True,
-    )
-
-    # Update tracking file
-    ingested = load_ingested_files()
-    ingested.update(str(f) for f in files_to_ingest)
-    save_ingested_files(ingested)
-
-    print(f"\nDone. {len(documents)} documents ingested.")
-    print(f"Total tracked files: {len(ingested)}")
+        rebuild(client, collection, all_files, assume_yes)
 
 
 def main():
@@ -202,10 +232,11 @@ def main():
     ap.add_argument(
         "--incremental",
         action="store_true",
-        help="Only ingest new files not previously ingested. Safe to run repeatedly."
+        help="Sync only what changed: add new files, update edited ones, remove deleted ones."
     )
+    ap.add_argument("--yes", action="store_true", help="Full rebuild without the confirmation prompt.")
     args = ap.parse_args()
-    ingest(incremental=args.incremental)
+    ingest(incremental=args.incremental, assume_yes=args.yes)
 
 
 if __name__ == "__main__":

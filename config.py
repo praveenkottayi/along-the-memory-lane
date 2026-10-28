@@ -26,6 +26,9 @@ RAW_BLOG_DIR = RAW_DIR / "blog"
 RAW_NOTES_DIR = RAW_DIR / "notes"
 RAW_PHOTOS_DIR = RAW_DIR / "photos"
 
+# WordPress.com blog to fetch posts from (scripts/fetch_wordpress_api.py, scripts/update.py)
+BLOG_SITE = os.getenv("BLOG_SITE", "praveenkottayi.com")
+
 # Ollama models (local, used for embedding + chat)
 EMBED_MODEL = "nomic-embed-text"
 LLM_MODEL = "llama3.1:8b-instruct-q4_0"
